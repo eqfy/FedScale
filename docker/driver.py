@@ -137,7 +137,7 @@ def terminate(job_name):
     for vm_ip in job_meta['vms']:
         print(f"Shutting down job on {vm_ip}")
         with open(f"{job_name}_logging", 'a') as fout:
-            subprocess.Popen(f'ssh {job_meta["user"]}{vm_ip} "python {current_path}/shutdown.py {job_name}"',
+            subprocess.Popen(f'ssh {job_meta["user"]}{vm_ip} "~/anaconda3/bin/python {current_path}/shutdown.py {job_name}"',
                              shell=True, stdout=fout, stderr=fout)
 
 print_help: bool = False
