@@ -35,7 +35,7 @@ class FedDC_Client(Client):
             grad = pickle.load(model_in)
         return grad
 
-    def train(self, client_data, model: torch.nn.Module, conf, epochNo):
+    def train(self, client_data, model: torch.nn.Module, conf, mask_model, epochNo):
         clientId = conf.clientId
         device = conf.device
 
@@ -54,8 +54,7 @@ class FedDC_Client(Client):
 
         # TODO ===== load compensation =====
 
-        last_model_copy = [param.data.cpu().numpy() for param in model.stat_dict().values()]
-
+        last_model_copy = [param.data.clone() for param in model.state_dict().values()]
 
         optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
         criterion = torch.nn.CrossEntropyLoss().to(device=device)
@@ -113,15 +112,13 @@ class FedDC_Client(Client):
             else:
                 pass
                 # shared masking + local mask
-                # TODO uncomment for mask shifting
-                # max_value = float(gradient_tmp.abs().max())
-                # largest_tmp = gradient_tmp.clone().detach()
-                # largest_tmp[mask_model[idx] == True] = max_value
-                # largest_tmp, ctx_tmp = compressor.compress(largest_tmp)
-                # largest_tmp = compressor.decompress(largest_tmp, ctx_tmp)
-                # largest_tmp = largest_tmp.to(torch.bool)
-
-                # gradient_tmp[largest_tmp != True] = 0.0
+                max_value = float(gradient_tmp.abs().max())
+                largest_tmp = gradient_tmp.clone().detach()
+                largest_tmp[mask_model[idx] == True] = max_value
+                largest_tmp, ctx_tmp = compressor.compress(largest_tmp)
+                largest_tmp = compressor.decompress(largest_tmp, ctx_tmp)
+                largest_tmp = largest_tmp.to(torch.bool)
+                gradient_tmp[largest_tmp != True] = 0.0
 
             # ===== update compensation ======
             # compensation_model[idx] = gradient_original - gradient_tmp
@@ -131,7 +128,6 @@ class FedDC_Client(Client):
         # ===== TODO save compensation =====
         # self.save_compensation(compensation_model, temp_path)
         
-
 
         # ===== collect results =====
         results = {'clientId':clientId, 'moving_loss': epoch_train_loss,
@@ -144,7 +140,7 @@ class FedDC_Client(Client):
             logging.info(f"Training of (CLIENT: {clientId}) failed as {error_type}")
 
         results['update_weight'] = model_param
-        results['update_gradeint'] = model_gradient
+        results['update_gradient'] = model_gradient
         results['wall_duration'] = 0
 
         return results

@@ -218,7 +218,7 @@ parser.add_argument('--no-bidirectional', dest='bidirectional', action='store_fa
                     help='Turn off bi-directional RNNs, introduces lookahead convolution')
 
 # for FedDC
-parser.add_argument('--dataset_total_worker', type=int, default=2800, help="number of total workers in the current dataset")
+parser.add_argument('--dataset_total_clients', type=int, default=2800, help="number of total workers in the current dataset")
 parser.add_argument('--sticky_group_size', type=int, default=100, help="sticky group size used for sticky sampling")
 parser.add_argument('--change_num', type=int, default=20, help="number of new clients per round in sticky sampling")
 parser.add_argument('--total_mask_ratio', type=float, default=1.0, help="total mask ratio used for compression")

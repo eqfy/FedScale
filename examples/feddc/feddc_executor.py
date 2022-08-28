@@ -27,6 +27,7 @@ class FedDC_Executor(Executor):
         self.temp_mask_path = os.path.join(
             execution.logDir, 'mask_'+str(args.this_rank)+'.pth.tar')
         self.mask = []
+        self.epoch = 0
 
     def get_client_trainer(self, conf):
         return FedDC_Client(conf)
@@ -47,6 +48,11 @@ class FedDC_Executor(Executor):
         with open(self.temp_mask_path, 'wb') as mask_out:
             pickle.dump(self.mask, mask_out)
 
+    def load_shared_mask(self):
+        with open(self.temp_mask_path, 'rb') as mask_in:
+            mask = pickle.load(mask_in)
+        return mask
+
     def training_handler(self, clientId, conf, model=None):
         """Train model given client id
         
@@ -58,8 +64,9 @@ class FedDC_Executor(Executor):
             dictionary: The train result
         
         """
-        # load last global model
+        # load last global model and mask
         client_model = self.load_global_model() if model is None else model
+        mask_model = self.load_shared_mask()
 
         conf.clientId, conf.device = clientId, self.device
         conf.tokenizer = fllibs.tokenizer
@@ -75,7 +82,7 @@ class FedDC_Executor(Executor):
 
             client = self.get_client_trainer(conf)
             train_res = client.train(
-                client_data=client_data, model=client_model, conf=conf, epochNo=self.epoch)
+                client_data=client_data, model=client_model, conf=conf, mask_model=mask_model, epochNo=self.epoch)
 
         return train_res
 
