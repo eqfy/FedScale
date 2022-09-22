@@ -80,7 +80,8 @@ def process_cmd(yaml_file, local=False):
     # =========== Submit job to parameter server ============
     running_vms.add(ps_ip)
     ps_cmd = f" python {yaml_conf['exp_path']}/{yaml_conf['aggregator_entry']} {conf_script} --this_rank=0 --num_executors={total_gpu_processes} --executor_configs={executor_configs} "
-
+    print(ps_cmd)
+    
     with open(f"{job_name}_logging", 'wb') as fout:
         pass
 

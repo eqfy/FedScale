@@ -36,6 +36,9 @@ class clientManager(object):
         self.user_trace = None
         self.args = args
 
+        # --- sticky group ---
+        self.cur_group = []
+
         if args.device_avail_file is not None:
             with open(args.device_avail_file, 'rb') as fin:
                 self.user_trace = pickle.load(fin)
@@ -205,6 +208,51 @@ class clientManager(object):
 
     def isClientActive(self, clientId, cur_time):
         return self.Clients[self.getUniqueId(0, clientId)].isActive(cur_time)
+
+    # Sticky sampling
+    def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0):
+        self.count += 1
+    
+        clients_online = self.getFeasibleClients(cur_time)
+       
+        # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
+        # logging.info(f"clients online: {clients_online}")
+        if len(clients_online) <= numOfClients:
+            return clients_online
+
+        pickled_clients = None
+        pickled_sticky_clients = []
+
+        if len(self.cur_group) == 0:
+            # initalize the group
+            self.rng.shuffle(clients_online)
+            client_len = min(K, len(clients_online) -1)
+            self.cur_group = clients_online[:client_len]
+            pickled_clients = self.cur_group[:numOfClients]
+        else:
+            
+            # randomly delete some clients
+            self.rng.shuffle(self.cur_group)
+            pickled_sticky_clients = self.cur_group[:(numOfClients - change_num)]
+            # randomly include some clients
+            self.rng.shuffle(clients_online)
+            client_len = min(change_num, len(clients_online)-1)
+            pickled_changes = []
+            for client in clients_online:
+                if client in self.cur_group:
+                    continue
+                pickled_changes.append(client)
+                if len(pickled_changes) == client_len:
+                    break
+            change_len = len(pickled_changes)
+            
+            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)} {sorted(pickled_changes)}")
+            pickled_clients = pickled_sticky_clients + pickled_changes
+            
+            self.cur_group = self.cur_group[:-change_len] + pickled_changes
+            self.picked_changes = pickled_changes
+        # logging.info(f"pickled clients: len {len(pickled_clients)} {pickled_clients}")
+        return pickled_clients, set(pickled_sticky_clients)
 
     def select_participants(self, num_of_clients: int, cur_time: float=0) -> List[int]:
         """Select participating clients for current execution task.

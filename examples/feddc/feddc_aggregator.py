@@ -8,24 +8,49 @@ from fedscale.core.logger.aggragation import *
 from fedscale.utils.compressor.topk import TopKCompressor
 
 
+def check_sparsification_ratio(global_g_list):
+    worker_number = len(global_g_list)
+    spar_ratio = 0.
+
+    total_param = 0
+    for g_idx, g_param in enumerate(global_g_list[0]):
+        total_param += len(torch.flatten(global_g_list[0][g_idx]))
+
+    for i in range(worker_number):
+        non_zero_param = 0
+        for g_idx, g_param in enumerate(global_g_list[i]):
+            mask = g_param != 0.
+            # print(mask)
+            non_zero_param += float(torch.sum(mask))
+
+        spar_ratio += (non_zero_param / total_param) / worker_number
+
+    return spar_ratio
+
 class FedDC_Aggregator(Aggregator):
     """Feed aggregator using tensorflow models"""
     def __init__(self, args):
         super().__init__(args)
-        self.dataset_total_clients = args.dataset_total_clients # to distinguish between self.args.total_worker which is the total worker in a round
+        self.dataset_total_worker = args.dataset_total_worker # to distinguish between self.args.total_worker which is the total worker in a round
         self.num_participants = args.num_participants
-        self.sticky_group_size = args.sticky_group_size
-        self.change_num = args.change_num
+
         self.total_mask_ratio = args.total_mask_ratio  # = shared_mask + local_mask
         self.shared_mask_ratio = args.shared_mask_ratio
         self.regenerate_epoch = args.regenerate_epoch
         self.max_prefetch_round = args.max_prefetch_round
+        
         self.sampling_strategy = args.sampling_strategy
+        self.sticky_group_size = args.sticky_group_size
+        self.sticky_group_change_num = args.sticky_group_change_num
+        self.real_change_num = 0
+        self.pickled_sticky_client = []
+
         self.fl_method = args.fl_method
 
         self.compressed_gradient = None
         self.mask_record_list = []
         self.shared_mask = []
+        # logging.info("Good Init")
 
     def init_mask(self):
         self.shared_mask = []
@@ -92,8 +117,10 @@ class FedDC_Aggregator(Aggregator):
         self.model_in_update += 1
         self.aggregate_client_weights(results)
 
+        # logging.info("Good 1")
         # All clients are done
         if self.model_in_update == self.tasks_round:
+            # logging.info("Good 2")
             if self.fl_method == "APF":
                 # TODO APF
                 pass
@@ -103,6 +130,12 @@ class FedDC_Aggregator(Aggregator):
             if self.fl_method == "APF":
                 # TODO
                 pass
+            # logging.info("Good 3")
+            spar_ratio = check_sparsification_ratio([self.compressed_gradient])
+            mask_ratio = check_sparsification_ratio([self.shared_mask])
+            # ovlp_ratio = check_sparsification_ratio([self.overlap_gradient])
+            logging.info(f"Gradients sparsification: {spar_ratio}")
+            logging.info(f"Mask sparsification: {mask_ratio}")
 
             # ==== update global model =====
             model_state_dict = self.model.state_dict()
@@ -127,26 +160,25 @@ class FedDC_Aggregator(Aggregator):
         if self.model_in_update == 1:
             self.compressed_gradient = [torch.zeros_like(param.data).to(device=self.device).to(dtype=torch.float32) for param in self.model.state_dict().values()]
 
-        prob = self.get_gradient_weight()
+        prob = self.get_gradient_weight(results['clientId'])
         for idx, param in enumerate(self.model.state_dict().values()):
             self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
 
-    def get_gradient_weight(self):
+    def get_gradient_weight(self, clientId):
         prob = 0
-        if self.sampling_strategy == "STICKY":
-            #     if self.round <= 1:
-            #         prob = (1.0 / float(self.tasks_round))
-            #     elif client_is_sticky:
-            #         prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / ((float(self.tasks_round) - float(self.cur_change_num)) / float(self.tasks_round)))
-            #     else:
-            #         prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / (float(self.cur_change_num) / (float(self.dataset_total_worker) - float(self.tasks_round))))
+        if self.sampling_strategy == "NA":
+            if self.round <= 1:
+                prob = (1.0 / float(self.tasks_round))
+            elif clientId in self.pickled_sticky_client:
+                prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / ((float(self.tasks_round) - float(self.sticky_group_change_num)) / float(self.sticky_group_size)))
+            else:
+                prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / (float(self.sticky_group_change_num) / (float(self.dataset_total_worker) - float(self.sticky_group_size))))
             #     # For debugging purposes, something is wrong if sticky_total_prob != 1 and all clients have finished
             #     self.sticky_total_prob += prob
             #     logging.info(f"client {results['clientId']} has prob {prob} round total prob {self.sticky_total_prob} is sticky {client_is_sticky}\n \
             #         round worker count {self.tasks_round}\t change_num {self.cur_change_num}\t data set {self.dataset_total_worker}")
             #     if self.model_in_update == self.tasks_round:
             #         self.sticky_total_prob = 0
-            pass
         else:
             """
             [FedAvg] "Communication-Efficient Learning of Deep Networks from Decentralized Data".
@@ -185,6 +217,25 @@ class FedDC_Aggregator(Aggregator):
             determined_mask = compressor_shr.decompress(determined_mask, ctx_tmp)
             self.shared_mask[idx] = determined_mask.to(torch.bool)
 
+    def create_client_task(self, executorId):
+        """Issue a new client training task to specific executor
+        
+        Args:
+            executorId (int): Executor Id.
+        
+        Returns:
+            tuple: Training config for new task. (dictionary, PyTorch or TensorFlow module)
+
+        """
+        next_clientId = self.resource_manager.get_next_task(executorId)
+        train_config = None
+        # NOTE: model = None then the executor will load the global model broadcasted in UPDATE_MODEL
+        model = None
+        if next_clientId != None:
+            config = self.get_client_conf(next_clientId)
+            train_config = {'client_id': next_clientId, 'task_config': config, "agg_weight": (self.get_gradient_weight(next_clientId) * float(self.dataset_total_worker))}
+        return train_config, model
+    
     def CLIENT_PING(self, request, context):
         """Handle client ping requests
         
@@ -210,6 +261,7 @@ class FedDC_Aggregator(Aggregator):
             if current_event == commons.CLIENT_TRAIN:
                 response_msg, response_data = self.create_client_task(
                     client_id)
+                
                 if response_msg is None:
                     current_event = commons.DUMMY_EVENT
                     if self.experiment_mode != commons.SIMULATION_MODE:
@@ -233,6 +285,25 @@ class FedDC_Aggregator(Aggregator):
             logging.info(f"Issue EVENT ({current_event}) to EXECUTOR ({executor_id})")
         
         return response
+
+    def select_participants(self, select_num_participants, overcommitment=1.3):
+    
+        if self.sampling_strategy == "UNIFORM":
+            results = sorted(self.client_manager.select_participants(
+                int(select_num_participants*overcommitment),
+                cur_time=self.global_virtual_clock),
+            )
+        else:
+            results, self.pickled_sticky_client = self.client_manager.select_participants_sticky(
+                int(select_num_participants*overcommitment),
+                cur_time=self.global_virtual_clock,
+                K=self.sticky_group_size,
+                change_num=self.sticky_group_change_num
+            )
+            results = sorted(results)
+
+        return results 
+
 
     def round_completion_handler(self):
         """Triggered upon the round completion, it registers the last round execution info,
@@ -270,10 +341,16 @@ class FedDC_Aggregator(Aggregator):
         # update select participants
         self.sampled_participants = self.select_participants(
             select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
+          
         (clientsToRun, round_stragglers, virtual_client_clock, round_duration, flatten_client_duration) = self.tictak_client_tasks(
             self.sampled_participants, self.args.num_participants)
 
-        logging.info(f"Selected participants to run: {clientsToRun}")
+        # self.real_change_num = 0
+        # for clientId in clientsToRun:
+        #     if not (clientId in self.pickled_sticky_client):
+        #          self.real_change_num += 1
+        
+        logging.info(f"Selected participants to run: {sorted(clientsToRun)}")
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
         self.resource_manager.register_tasks(clientsToRun)

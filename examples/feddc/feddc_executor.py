@@ -53,7 +53,7 @@ class FedDC_Executor(Executor):
             mask = pickle.load(mask_in)
         return mask
 
-    def training_handler(self, clientId, conf, model=None):
+    def training_handler(self, clientId, conf, model=None, agg_weight=None):
         """Train model given client id
         
         Args:
@@ -82,10 +82,42 @@ class FedDC_Executor(Executor):
 
             client = self.get_client_trainer(conf)
             train_res = client.train(
-                client_data=client_data, model=client_model, conf=conf, mask_model=mask_model, epochNo=self.epoch)
+                client_data=client_data, model=client_model, conf=conf, mask_model=mask_model, epochNo=self.epoch, agg_weight=agg_weight)
 
         return train_res
 
+    def Train(self, config):
+        """Load train config and data to start training on that client
+
+        Args:
+            config (dictionary): The client training config.
+
+        Returns:     
+            tuple (int, dictionary): The client id and train result
+
+        """
+        client_id, train_config, agg_weight = config['client_id'], config['task_config'], config['agg_weight']
+
+        model = None
+        if 'model' in train_config and train_config['model'] is not None:
+            model = train_config['model']
+
+        client_conf = self.override_conf(train_config)
+        train_res = self.training_handler(
+            clientId=client_id, conf=client_conf, model=model, agg_weight=agg_weight)
+
+        # Report execution completion meta information
+        response = self.aggregator_communicator.stub.CLIENT_EXECUTE_COMPLETION(
+            job_api_pb2.CompleteRequest(
+                client_id=str(client_id), executor_id=self.executor_id,
+                event=commons.CLIENT_TRAIN, status=True, msg=None,
+                meta_result=None, data_result=None
+            )
+        )
+        self.dispatch_worker_events(response)
+
+        return client_id, train_res
+    
     def event_monitor(self):
         """Activate event handler once receiving new message
         """
@@ -102,6 +134,7 @@ class FedDC_Executor(Executor):
                     train_model = self.deserialize_response(request.data)
                     train_config['model'] = train_model
                     train_config['client_id'] = int(train_config['client_id'])
+                    train_config['agg_weight'] = float(train_config['agg_weight'])
                     client_id, train_res = self.Train(train_config)
 
                     # Upload model updates

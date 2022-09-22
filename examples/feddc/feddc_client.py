@@ -35,7 +35,7 @@ class FedDC_Client(Client):
             grad = pickle.load(model_in)
         return grad
 
-    def train(self, client_data, model: torch.nn.Module, conf, mask_model, epochNo):
+    def train(self, client_data, model: torch.nn.Module, conf, mask_model, epochNo, agg_weight):
         clientId = conf.clientId
         device = conf.device
 
@@ -47,13 +47,30 @@ class FedDC_Client(Client):
         trained_unique_samples = min(len(client_data.dataset), conf.local_steps* conf.batch_size)
 
 
-        logging.info(f"Start to train (CLIENT: {clientId}) ...")
+        logging.info(f"Start to train (CLIENT: {clientId}) (WEIGHT: {agg_weight}) (LR: {conf.learning_rate})...")
 
         model = model.to(device=device)
         model.train()
 
         # TODO ===== load compensation =====
-
+        temp_path = os.path.join(logDir, 'compensation_c'+str(clientId)+'.pth.tar')
+        compensation_model = []
+        # temp_path_2 = os.path.join(logDir, 'gradient_c'+str(clientId)+'.pth.tar')
+        if (agg_weight > 100.0) or (not os.path.exists(temp_path)):
+            # create a new compensation model
+            for idx, param in enumerate(model.state_dict().values()):
+                tmp = torch.zeros_like(param.data).to(device)
+                compensation_model.append(tmp)
+                
+                tmp_2 = torch.zeros_like(param.data).to(device)
+                # gradient_model.append(tmp_2)
+        else:
+            compensation_model = self.load_compensation(temp_path)
+        
+        keys = [] 
+        for idx, key in enumerate(model.state_dict()):
+            keys.append(key)
+        
         last_model_copy = [param.data.clone() for param in model.state_dict().values()]
 
         optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
@@ -67,7 +84,9 @@ class FedDC_Client(Client):
         targets = torch.zeros(32, dtype=torch.long)
         for i in range(len(targets)):
             targets[i] = 0
-
+        
+        # agg_weight = 1.0
+        # test
         # TODO: One may hope to run fixed number of epochs, instead of iterations
         while completed_steps < conf.local_steps:
             # self.train_step(client_data, conf, model, optimizer, criterion) # TODO it is probably ok to just use this if we do not consider changes for APF
@@ -101,6 +120,11 @@ class FedDC_Client(Client):
             gradient_tmp = last_model_copy[idx] - param.data
 
             # TODO ===== apply compensation =====
+            if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+                compensation_model[idx] = compensation_model[idx].to(device)
+                gradient_tmp += (compensation_model[idx] / agg_weight) 
+                
+            gradient_original = gradient_tmp.clone().detach()
 
             # ===== apply compression =====
             if fl_method == 'STC' or epochNo % regenerate_epoch == 1:
@@ -110,7 +134,7 @@ class FedDC_Client(Client):
 
                 gradient_tmp = compressor.decompress(gradient_tmp, ctx_tmp)
             else:
-                pass
+                # pass
                 # shared masking + local mask
                 max_value = float(gradient_tmp.abs().max())
                 largest_tmp = gradient_tmp.clone().detach()
@@ -121,12 +145,15 @@ class FedDC_Client(Client):
                 gradient_tmp[largest_tmp != True] = 0.0
 
             # ===== update compensation ======
-            # compensation_model[idx] = gradient_original - gradient_tmp
+            gradient_original = gradient_original.to('cpu')
+            compensation_model[idx] = compensation_model[idx].to('cpu')
+            gradient_tmp = gradient_tmp.to('cpu')
+            compensation_model[idx] = (gradient_original - gradient_tmp) * agg_weight
 
             model_gradient.append(gradient_tmp.cpu().numpy())
 
         # ===== TODO save compensation =====
-        # self.save_compensation(compensation_model, temp_path)
+        self.save_compensation(compensation_model, temp_path)
         
 
         # ===== collect results =====
