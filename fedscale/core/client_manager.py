@@ -10,7 +10,7 @@ from fedscale.core.internal.client import Client
 class clientManager(object):
 
     def __init__(self, mode, args, sample_seed=233):
-        self.Clients = {}
+        self.Clients: Dict[str, Client]= {}
         self.clientOnHosts = {}
         self.mode = mode
         self.filter_less = args.filter_less
@@ -62,7 +62,7 @@ class clientManager(object):
         user_trace = None if self.user_trace is None else self.user_trace[self.user_trace_keys[int(
             clientId) % len(self.user_trace)]]
 
-        self.Clients[uniqueId] = Client(hostId, clientId, speed, user_trace)
+        self.Clients[uniqueId] = Client(hostId, clientId, speed, augmentation_factor=self.args.augmentation_factor, upload_factor=self.args.upload_factor, download_factor=self.args.download_factor, traces=user_trace)
 
         # remove clients
         if size >= self.filter_less and size <= self.filter_more:
@@ -213,6 +213,7 @@ class clientManager(object):
     def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0):
         self.count += 1
     
+        logging.info(f"boo num {numOfClients} K {K} Change {change_num}")
         clients_online = self.getFeasibleClients(cur_time)
        
         # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
@@ -246,7 +247,7 @@ class clientManager(object):
                     break
             change_len = len(pickled_changes)
             
-            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)} {sorted(pickled_changes)}")
+            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)}\n{sorted(pickled_changes)}\n{len(pickled_sticky_clients)} {len(pickled_changes)}")
             pickled_clients = pickled_sticky_clients + pickled_changes
             
             self.cur_group = self.cur_group[:-change_len] + pickled_changes
