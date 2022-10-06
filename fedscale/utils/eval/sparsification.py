@@ -62,8 +62,6 @@ class Sparsification(object):
             
         res = float(tot_nonzero / tot_param)
 
-        logging.info(f"res {res} l {l} r {r}")
-
         if r - l == 1:
             Sparsification.model_update_1_round_overhead = res
         elif use_accurate_cache:

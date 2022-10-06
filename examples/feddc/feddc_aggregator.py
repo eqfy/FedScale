@@ -147,7 +147,6 @@ class FedDC_Aggregator(Aggregator):
                     r = self.round - 1
 
                     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
-                    logging.info(f"l {l}  r {r} dratio {downstream_update_ratio} ")
                     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
                     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
                     
@@ -240,10 +239,8 @@ class FedDC_Aggregator(Aggregator):
                 # TODO
                 pass
             # logging.info("Good 3")
-            # spar_ratio = Sparsification.check_sparsification_ratio([self.compressed_gradient])
-            # mask_ratio = Sparsification.check_sparsification_ratio([self.shared_mask])
-            mask_ratio = self.check_sparsification_ratio([self.shared_mask])
-            spar_ratio = self.check_sparsification_ratio([self.compressed_gradient])
+            spar_ratio = Sparsification.check_sparsification_ratio([self.compressed_gradient])
+            mask_ratio = Sparsification.check_sparsification_ratio([self.shared_mask])
             # ovlp_ratio = check_sparsification_ratio([self.overlap_gradient])
             logging.info(f"Gradients sparsification: {spar_ratio}")
             logging.info(f"Mask sparsification: {mask_ratio}")

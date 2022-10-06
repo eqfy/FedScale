@@ -213,7 +213,7 @@ class clientManager(object):
     def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0):
         self.count += 1
     
-        logging.info(f"boo num {numOfClients} K {K} Change {change_num}")
+        logging.info(f"Sticky sampling num {numOfClients} K {K} Change {change_num}")
         clients_online = self.getFeasibleClients(cur_time)
        
         # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
@@ -247,7 +247,7 @@ class clientManager(object):
                     break
             change_len = len(pickled_changes)
             
-            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)}\n{sorted(pickled_changes)}\n{len(pickled_sticky_clients)} {len(pickled_changes)}")
+            logging.info(f"Selected sticky clients ({len(pickled_sticky_clients)}): {sorted(pickled_sticky_clients)}\nSelected new clients({len(pickled_changes)}) {sorted(pickled_changes)}")
             pickled_clients = pickled_sticky_clients + pickled_changes
             
             self.cur_group = self.cur_group[:-change_len] + pickled_changes
