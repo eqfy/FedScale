@@ -59,7 +59,6 @@ job_conf:
     - sticky_group_change_num: 6
     # - malicious_factor: 4
     - use_cuda: True
-    - cuda_device: cuda:0
     - total_mask_ratio: 0.2
     - shared_mask_ratio: 0.16
 

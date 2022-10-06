@@ -48,7 +48,7 @@ class FedDC_Aggregator(Aggregator):
             self.shared_mask.append(torch.zeros_like(param, dtype=torch.bool).to(dtype=torch.bool))
 
     def client_register_handler(self, executorId, info):
-        """Triggered once receive new executor registration.
+        """Triggered once after all executors have registered
         
         Args:
             executorId (int): Executor Id
@@ -139,7 +139,6 @@ class FedDC_Aggregator(Aggregator):
                     ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                    
                     
                     self.round_evaluator.recordClient(client_to_run, dl_size, ul_size, exe_cost)
                 elif self.fl_method == "FedDC":
