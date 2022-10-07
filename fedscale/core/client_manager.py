@@ -221,19 +221,21 @@ class clientManager(object):
         if len(clients_online) <= numOfClients:
             return clients_online
 
-        pickled_clients = None
         pickled_sticky_clients = []
+        pickled_changes = []
 
         if len(self.cur_group) == 0:
             # initalize the group
             self.rng.shuffle(clients_online)
             client_len = min(K, len(clients_online) -1)
             self.cur_group = clients_online[:client_len]
-            pickled_clients = self.cur_group[:numOfClients]
+            # We treat the clients sampled from the first round as sticky clients
+            pickled_changes = self.cur_group[:min(numOfClients, client_len)]
         else:
             
             # randomly delete some clients
             self.rng.shuffle(self.cur_group)
+            logging.info(f"num {numOfClients} change {change_num}")
             pickled_sticky_clients = self.cur_group[:(numOfClients - change_num)]
             # randomly include some clients
             self.rng.shuffle(clients_online)
@@ -245,15 +247,9 @@ class clientManager(object):
                 pickled_changes.append(client)
                 if len(pickled_changes) == client_len:
                     break
-            change_len = len(pickled_changes)
             
             logging.info(f"Selected sticky clients ({len(pickled_sticky_clients)}): {sorted(pickled_sticky_clients)}\nSelected new clients({len(pickled_changes)}) {sorted(pickled_changes)}")
-            pickled_clients = pickled_sticky_clients + pickled_changes
-            
-            self.cur_group = self.cur_group[:-change_len] + pickled_changes
-            self.picked_changes = pickled_changes
-        # logging.info(f"pickled clients: len {len(pickled_clients)} {pickled_clients}")
-        return pickled_clients, set(pickled_sticky_clients)
+        return pickled_sticky_clients, pickled_changes
 
     def select_participants(self, num_of_clients: int, cur_time: float=0) -> List[int]:
         """Select participating clients for current execution task.

@@ -27,7 +27,9 @@ class FedDC_Aggregator(Aggregator):
         self.sticky_group_size = args.sticky_group_size
         self.sticky_group_change_num = args.sticky_group_change_num
         self.real_change_num = 0
-        self.pickled_sticky_client = []
+        self.sampled_sticky_client_set = []
+        self.sampled_sticky_clients = []
+        self.sampled_changed_clients = []
 
         self.fl_method = args.fl_method
 
@@ -36,7 +38,7 @@ class FedDC_Aggregator(Aggregator):
         self.shared_mask = []
 
         self.last_update_index = []
-        self.lost_clients = []
+        self.round_lost_clients = []
         self.clients_to_run = []
         self.slowest_client_id = -1
         self.round_evaluator = RoundEvaluator()
@@ -114,7 +116,9 @@ class FedDC_Aggregator(Aggregator):
             tuple: Return the sampled clients and client execution information in the last round.
 
         """
-        # TictakResponse = namedtuple('TictakResponse', ['clients_to_run', 'dummy_clients', 'lost_clients', 'virtual_client_clock', 'round_duration', 'completionTimes'])
+
+        if len(sampled_clients) == 0:
+            return [], [], [], {}, 0, []
 
         if self.experiment_mode == commons.SIMULATION_MODE:
             # NOTE: We try to remove dummy events as much as possible in simulations,
@@ -139,7 +143,6 @@ class FedDC_Aggregator(Aggregator):
                     ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                    
                     self.round_evaluator.recordClient(client_to_run, dl_size, ul_size, exe_cost)
                 elif self.fl_method == "FedDC":
                     l = self.last_update_index[client_to_run]
@@ -182,7 +185,7 @@ class FedDC_Aggregator(Aggregator):
             slowest_client_id = sampledClientsReal[top_k_index[-1]]
             return (clients_to_run, dummy_clients, sampledClientsLost,
                     virtual_client_clock, round_duration,
-                    completionTimes[:num_clients_to_collect], slowest_client_id)
+                    completionTimes[:num_clients_to_collect])
         else:
             virtual_client_clock = {
                 client: {'computation': 1, 'communication': 1} for client in sampled_clients}
@@ -292,10 +295,10 @@ class FedDC_Aggregator(Aggregator):
 
     def get_gradient_weight(self, clientId):
         prob = 0
-        if self.sampling_strategy == "NA":
+        if self.sampling_strategy == "STICKY":
             if self.round <= 1:
                 prob = (1.0 / float(self.tasks_round))
-            elif clientId in self.pickled_sticky_client:
+            elif clientId in self.sampled_sticky_client_set:
                 prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / ((float(self.tasks_round) - float(self.sticky_group_change_num)) / float(self.sticky_group_size)))
             else:
                 prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / (float(self.sticky_group_change_num) / (float(self.dataset_total_worker) - float(self.sticky_group_size))))
@@ -412,23 +415,22 @@ class FedDC_Aggregator(Aggregator):
         
         return response
 
-    def select_participants(self, select_num_participants, overcommitment=1.3):
-    
-        if self.sampling_strategy == "UNIFORM":
-            results = sorted(self.client_manager.select_participants(
-                round(select_num_participants*overcommitment),
-                cur_time=self.global_virtual_clock),
-            )
-        else:
-            results, self.pickled_sticky_client = self.client_manager.select_participants_sticky(
+    def select_participants(self, select_num_participants, overcommitment=1.0):
+        return sorted(self.client_manager.select_participants(
+            round(select_num_participants*overcommitment),
+            cur_time=self.global_virtual_clock),
+        )
+
+
+    def select_participants_sticky(self, select_num_participants, overcommitment=1.0):
+        self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
                 round(select_num_participants*overcommitment),
                 cur_time=self.global_virtual_clock,
-                K=round(self.sticky_group_size*overcommitment),
+                K=self.sticky_group_size,
                 change_num=round(self.sticky_group_change_num*overcommitment)
             )
-            results = sorted(results)
-
-        return results 
+        self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
+        return self.sampled_sticky_clients, self.sampled_changed_clients
 
 
     def round_completion_handler(self):
@@ -460,31 +462,12 @@ class FedDC_Aggregator(Aggregator):
         logging.info(f"Wall clock: {round(self.global_virtual_clock)} s, round: {self.round}, Planned participants: " +
                      f"{len(self.sampled_participants)}, Succeed participants: {len(self.stats_util_accumulator)}, Training loss: {avg_loss}")
 
-
-        # Record bandwidth usage
-        client_dl_bws = []
-        client_ul_bws = []
-        straggler_dl_bws = []
-        straggler_ul_bws = []
-        total_dl_bw = 0
-        total_ul_bw = 0
-        total_overcommit_dl_bw = 0
-        total_bw = 0
-        total_dl_time = 0
-        total_ul_time = 0
-        round_dl_times = []
-        round_ul_times = []
-        avg_round_dl_times = 0
-        avg_round_ul_times = 0
-
-
         # dump round completion information to tensorboard
         if len(self.loss_accumulator):
             self.log_train_result(avg_loss)
 
         if self.round > 1:
-            self.round_stragglers.extend(self.lost_clients)
-            self.round_evaluator.recordRoundCompletion(self.clients_to_run, self.round_stragglers, self.slowest_client_id)
+            self.round_evaluator.recordRoundCompletion(self.clients_to_run, self.round_stragglers + self.round_lost_clients, self.slowest_client_id)
             logging.info(f"Cumulative bandwidth usage:\n \
             total (excluding overcommit): {self.round_evaluator.total_bandwidth:.2f} kbit\n \
             total (including overcommit): {self.round_evaluator.total_bandwidth + self.round_evaluator.total_overcommit_bandwidth:.2f} kbit\n \
@@ -504,23 +487,55 @@ class FedDC_Aggregator(Aggregator):
             self.round_evaluator.startNewRound()
 
         # update select participants
-        self.sampled_participants = self.select_participants(
-            select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
-        
-        logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
-        (clientsToRun, round_stragglers, lost_clients, virtual_client_clock, round_duration, flatten_client_duration, slowest_client_id) = self.tictak_client_tasks(
-            self.sampled_participants, self.args.num_participants)
+        if self.sampling_strategy == "STICKY":
+            # self.select_participants_sticky(select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
+
+            self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
+                round(self.args.num_participants*self.args.overcommitment),
+                cur_time=self.global_virtual_clock,
+                K=self.sticky_group_size,
+                change_num=round(self.sticky_group_change_num*self.args.overcommitment)
+            )
+            self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
+
+            (sticky_to_run, sticky_stragglers, sticky_lost, sticky_virtual_client_clock, 
+            sticky_round_duration, sticky_flatten_client_duration) = self.tictak_client_tasks(
+                self.sampled_sticky_clients, self.args.num_participants - self.args.sticky_group_change_num)
+            (change_to_run, change_stragglers, change_lost, change_virtual_client_clock, 
+            change_round_duration, change_flatten_client_duration) = self.tictak_client_tasks(
+                self.sampled_changed_clients, 
+                self.args.sticky_group_change_num if self.round > 1 else self.args.num_participants)
+
+            logging.info(f"Selected sticky participants to run: {sorted(sticky_to_run)}\nstragglers: {sorted(sticky_stragglers)}\nlost: {sorted(sticky_lost)}")
+            logging.info(f"Selected change participants to run: {sorted(change_to_run)}\nstragglers: {sorted(change_stragglers)}\nlost: {sorted(change_lost)}")
+
+            self.clients_to_run = sticky_to_run + change_to_run
+            self.round_stragglers = sticky_stragglers + change_stragglers
+            self.round_lost_clients = sticky_lost + change_lost
+            self.virtual_client_clock = {**sticky_virtual_client_clock, **change_virtual_client_clock}
+            self.round_duration = max(sticky_round_duration, change_round_duration)
+            self.flatten_client_duration = numpy.array(sticky_flatten_client_duration + change_flatten_client_duration)
+            self.clients_to_run.sort(key=lambda k: self.virtual_client_clock[k]['round']);
+            self.slowest_client_id = self.clients_to_run[-1]
+
+            self.client_manager.cur_group = self.client_manager.cur_group[:-self.args.sticky_group_change_num] + change_to_run
+        else:
+            self.sampled_participants = self.select_participants(
+                select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
+            logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
+            (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)
+            self.slowest_client_id = self.clients_to_run[-1]
 
         # self.real_change_num = 0
         # for clientId in clientsToRun:
         #     if not (clientId in self.pickled_sticky_client):
         #          self.real_change_num += 1
         
-        logging.info(f"Selected participants to run: {sorted(clientsToRun)}\nstragglers: {sorted(round_stragglers)}\nlost: {sorted(lost_clients)}")
+        logging.info(f"Selected participants to run: {sorted(self.clients_to_run)}\nstragglers: {sorted(self.round_stragglers)}\nlost: {sorted(self.round_lost_clients)}")
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
-        self.resource_manager.register_tasks(clientsToRun)
-        self.tasks_round = len(clientsToRun)
+        self.resource_manager.register_tasks(self.clients_to_run)
+        self.tasks_round = len(self.clients_to_run)
 
         # Update executors and participants
         if self.experiment_mode == commons.SIMULATION_MODE:
@@ -531,13 +546,6 @@ class FedDC_Aggregator(Aggregator):
                                       for c_id in self.sampled_participants]
 
         self.save_last_param()
-        self.slowest_client_id = slowest_client_id
-        self.clients_to_run = clientsToRun
-        self.round_stragglers = round_stragglers
-        self.lost_clients = lost_clients
-        self.virtual_client_clock = virtual_client_clock
-        self.flatten_client_duration = numpy.array(flatten_client_duration)
-        self.round_duration = round_duration
         self.model_in_update = 0
         self.test_result_accumulator = []
         self.stats_util_accumulator = []
