@@ -46,7 +46,7 @@ class FedDC_Client(Client):
 
         trained_unique_samples = min(len(client_data.dataset), conf.local_steps* conf.batch_size)
 
-        logging.info(f"Start to train (CLIENT: {clientId}) (WEIGHT: {agg_weight}) (LR: {conf.learning_rate})...")
+        logging.info(f"Start to train (CLIENT: {clientId}) (WEIGHT: {agg_weight}) (epochNo: {epochNo}) (LR: {conf.learning_rate})...")
 
         model = model.to(device=device)
         model.train()
