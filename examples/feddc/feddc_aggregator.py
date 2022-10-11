@@ -1,4 +1,3 @@
-from collections import namedtuple
 import os
 import sys
 
@@ -525,6 +524,7 @@ class FedDC_Aggregator(Aggregator):
             logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
             (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)
             self.slowest_client_id = self.clients_to_run[-1]
+            self.flatten_client_duration = numpy.array(self.flatten_client_duration)
 
         # self.real_change_num = 0
         # for clientId in clientsToRun:
