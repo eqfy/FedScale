@@ -66,6 +66,11 @@ class FedDC_Executor(Executor):
         """
         # load last global model and mask
         client_model = self.load_global_model() if model is None else model
+        # for idx, param in enumerate(client_model.state_dict().values()): 
+        #     if idx == 0:
+        #         print("check", self.executor_id, clientId, param.data)
+        #         break
+        
         mask_model = self.load_shared_mask()
 
         conf.clientId, conf.device = clientId, self.device
@@ -82,7 +87,7 @@ class FedDC_Executor(Executor):
 
             client = self.get_client_trainer(conf)
             train_res = client.train(
-                client_data=client_data, model=client_model, conf=conf, mask_model=mask_model, epochNo=self.epoch, agg_weight=agg_weight)
+                client_data=client_data, model=client_model, conf=conf, mask_model=mask_model, epochNo=self.round, agg_weight=agg_weight)
 
         return train_res
 

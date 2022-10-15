@@ -246,7 +246,7 @@ class clientManager(object):
                     break
             change_len = len(pickled_changes)
             
-            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)} {sorted(pickled_changes)}")
+            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)} {sorted(pickled_changes)} {len(self.cur_group)}")
             pickled_clients = pickled_sticky_clients + pickled_changes
             
             self.cur_group = self.cur_group[:-change_len] + pickled_changes

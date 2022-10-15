@@ -39,6 +39,8 @@ class FedDC_Client(Client):
         clientId = conf.clientId
         device = conf.device
 
+        np.random.seed(1)
+        logging.info(f"Epoch: {epochNo}")
         # TODO Verify that this works, I've directly imported the args from config_parser and logDir from execution
         total_mask_ratio = args.total_mask_ratio
         fl_method = args.fl_method
@@ -48,6 +50,7 @@ class FedDC_Client(Client):
 
 
         logging.info(f"Start to train (CLIENT: {clientId}) (WEIGHT: {agg_weight}) (LR: {conf.learning_rate})...")
+        logging.info(f"{total_mask_ratio} {fl_method} {regenerate_epoch}")
 
         model = model.to(device=device)
         model.train()
@@ -73,17 +76,21 @@ class FedDC_Client(Client):
         
         last_model_copy = [param.data.clone() for param in model.state_dict().values()]
 
-        optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
-        criterion = torch.nn.CrossEntropyLoss().to(device=device)
+        optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate * agg_weight, momentum=0.9, weight_decay=5e-4)
+        if args.model == "lr":
+            criterion = torch.nn.CrossEntropyLoss().to(device=device)
+        else:
+            criterion = torch.nn.CrossEntropyLoss().to(device=device)
+
 
         epoch_train_loss = 1e-4
 
         error_type = None
         completed_steps = 0
 
-        targets = torch.zeros(32, dtype=torch.long)
-        for i in range(len(targets)):
-            targets[i] = 0
+        # targets = torch.zeros(32, dtype=torch.long)
+        # for i in range(len(targets)):
+        #     targets[i] = 0
         
         # agg_weight = 1.0
         # test
@@ -117,12 +124,12 @@ class FedDC_Client(Client):
         compressor = TopKCompressor(compress_ratio=total_mask_ratio)
         # ===== calculate gradient =====
         for idx, param in enumerate(model.state_dict().values()):
-            gradient_tmp = last_model_copy[idx] - param.data
+            gradient_tmp = (last_model_copy[idx] - param.data).to('cpu').type(torch.FloatTensor)
 
             # TODO ===== apply compensation =====
             if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
-                compensation_model[idx] = compensation_model[idx].to(device)
-                gradient_tmp += (compensation_model[idx] / agg_weight) 
+                compensation_model[idx] = compensation_model[idx].to('cpu')
+                gradient_tmp += compensation_model[idx] 
                 
             gradient_original = gradient_tmp.clone().detach()
 
@@ -148,8 +155,10 @@ class FedDC_Client(Client):
             gradient_original = gradient_original.to('cpu')
             compensation_model[idx] = compensation_model[idx].to('cpu')
             gradient_tmp = gradient_tmp.to('cpu')
-            compensation_model[idx] = (gradient_original - gradient_tmp) * agg_weight
-
+            compensation_model[idx] = (gradient_original.type(torch.FloatTensor) - gradient_tmp.type(torch.FloatTensor)).type(torch.FloatTensor)
+            # if agg_weight > 100.0:
+                # print(compensation_model[idx].type())
+                # compensation_model[idx] *= 368.8
             model_gradient.append(gradient_tmp.cpu().numpy())
 
         # ===== TODO save compensation =====

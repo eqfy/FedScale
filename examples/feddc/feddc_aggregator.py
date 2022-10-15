@@ -27,6 +27,32 @@ def check_sparsification_ratio(global_g_list):
 
     return spar_ratio
 
+def check_model_update_overhead(l, r, global_model, mask_record_list):
+    if r - l < 0:
+        raise RuntimeError(f"check_model_update_overhead() saw r{r} which is less than l{l}")
+
+    if r - l == 0:
+        return 0
+
+    mask_accum_list = []
+    
+    for p_idx, key in enumerate(global_model.state_dict().keys()):
+        mask_accum_list.append(torch.zeros_like(global_model.state_dict()[key], dtype=torch.bool).to("cpu"))
+
+    for idx in range(l, r):
+        for p_idx, key in enumerate(global_model.state_dict().keys()):
+            mask_accum_list[p_idx] |= mask_record_list[idx][p_idx].to("cpu")
+    
+    tot_nonzero = 0
+    tot_param = 0
+    for p_idx, key in enumerate(global_model.state_dict().keys()):
+        tot_nonzero += mask_accum_list[p_idx].sum()
+        tot_param += mask_accum_list[p_idx].numel()
+        
+    res = float(tot_nonzero / tot_param)
+
+    return res
+
 class FedDC_Aggregator(Aggregator):
     """Feed aggregator using tensorflow models"""
     def __init__(self, args):
@@ -113,6 +139,8 @@ class FedDC_Aggregator(Aggregator):
 
         # ================== Aggregate weights ======================
         self.update_lock.acquire()
+        # download_ratio = check_model_update_overhead(0, self.round - 1, self.model, self.mask_record_list)
+        # logging.info(f"Download sparsification: {results['clientId']} {download_ratio}")
 
         self.model_in_update += 1
         self.aggregate_client_weights(results)
@@ -160,13 +188,14 @@ class FedDC_Aggregator(Aggregator):
         if self.model_in_update == 1:
             self.compressed_gradient = [torch.zeros_like(param.data).to(device=self.device).to(dtype=torch.float32) for param in self.model.state_dict().values()]
 
-        prob = self.get_gradient_weight(results['clientId'])
+        # prob = self.get_gradient_weight(results['clientId'])
+        prob = (1.0 / self.tasks_round)
         for idx, param in enumerate(self.model.state_dict().values()):
             self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
 
     def get_gradient_weight(self, clientId):
         prob = 0
-        if self.sampling_strategy == "NA":
+        if self.sampling_strategy == "STICKY":
             if self.round <= 1:
                 prob = (1.0 / float(self.tasks_round))
             elif clientId in self.pickled_sticky_client:
