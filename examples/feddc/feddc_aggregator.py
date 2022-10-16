@@ -188,10 +188,18 @@ class FedDC_Aggregator(Aggregator):
         if self.model_in_update == 1:
             self.compressed_gradient = [torch.zeros_like(param.data).to(device=self.device).to(dtype=torch.float32) for param in self.model.state_dict().values()]
 
-        # prob = self.get_gradient_weight(results['clientId'])
-        prob = (1.0 / self.tasks_round)
+        keys = [] 
+        for idx, key in enumerate(self.model.state_dict()):
+            keys.append(key)
+        
+        # prob = (1.0 / self.tasks_round)
         for idx, param in enumerate(self.model.state_dict().values()):
-            self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
+            if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+                prob = self.get_gradient_weight(results['clientId'])
+                self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
+            else:
+                prob = (1.0 / self.tasks_round)
+                self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
 
     def get_gradient_weight(self, clientId):
         prob = 0

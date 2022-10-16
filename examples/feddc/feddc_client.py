@@ -30,10 +30,10 @@ class FedDC_Client(Client):
         with open(temp_path, 'wb') as model_out:
             pickle.dump(model, model_out)
 
-    def load_global_grad(self, temp_path):
-        with open(temp_path, 'rb') as model_in:
-            grad = pickle.load(model_in)
-        return grad
+    # def load_running(self, temp_path):
+    #     with open(temp_path, 'rb') as model_in:
+    #         grad = pickle.load(model_in)
+    #     return grad
 
     def train(self, client_data, model: torch.nn.Module, conf, mask_model, epochNo, agg_weight):
         clientId = conf.clientId
@@ -70,13 +70,23 @@ class FedDC_Client(Client):
         else:
             compensation_model = self.load_compensation(temp_path)
         
+        # ===== load running mean ====
         keys = [] 
         for idx, key in enumerate(model.state_dict()):
             keys.append(key)
         
+        # temp_path_running = os.path.join(logDir, 'running_c'+str(clientId)+'.pth.tar')
+        # if os.path.exists(temp_path):
+        #     last_model = self.load_compensation(temp_path_running)
+        #     for idx, param in enumerate(model.state_dict().values()):
+        #         if (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+        #             param.data = last_model[idx].clone().detach()
+
+        model = model.to(device=device)
+
         last_model_copy = [param.data.clone() for param in model.state_dict().values()]
 
-        optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate * agg_weight, momentum=0.9, weight_decay=5e-4)
+        optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
         if args.model == "lr":
             criterion = torch.nn.CrossEntropyLoss().to(device=device)
         else:
@@ -129,8 +139,8 @@ class FedDC_Client(Client):
             # TODO ===== apply compensation =====
             if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
                 compensation_model[idx] = compensation_model[idx].to('cpu')
-                gradient_tmp += compensation_model[idx] 
-                
+                gradient_tmp += (compensation_model[idx] / agg_weight)
+            
             gradient_original = gradient_tmp.clone().detach()
 
             # ===== apply compression =====
@@ -155,15 +165,22 @@ class FedDC_Client(Client):
             gradient_original = gradient_original.to('cpu')
             compensation_model[idx] = compensation_model[idx].to('cpu')
             gradient_tmp = gradient_tmp.to('cpu')
-            compensation_model[idx] = (gradient_original.type(torch.FloatTensor) - gradient_tmp.type(torch.FloatTensor)).type(torch.FloatTensor)
+            compensation_model[idx] = (gradient_original.type(torch.FloatTensor) - gradient_tmp.type(torch.FloatTensor)).type(torch.FloatTensor) * agg_weight
             # if agg_weight > 100.0:
-                # print(compensation_model[idx].type())
-                # compensation_model[idx] *= 368.8
+            #     print(compensation_model[idx].type())
+            #     compensation_model[idx] *= 89.32
             model_gradient.append(gradient_tmp.cpu().numpy())
 
         # ===== TODO save compensation =====
         self.save_compensation(compensation_model, temp_path)
-        
+        # model = model.to(device="cpu")
+
+        # ===== TODO save running mean =====       
+        # save_model = []
+        # for idx, param in enumerate(model.state_dict().values()):
+        #     tmp = param.data.clone().detach().to(device="cpu")
+        #     save_model.append(tmp)
+        # self.save_compensation(save_model, temp_path_running)
 
         # ===== collect results =====
         results = {'clientId':clientId, 'moving_loss': epoch_train_loss,
