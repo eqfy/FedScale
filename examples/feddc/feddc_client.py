@@ -1,9 +1,11 @@
+from cmath import log
 import logging
 import math
 import os
 import pickle
 import sys
 
+import torch.nn as nn
 import numpy as np
 import torch
 from torch.autograd import Variable
@@ -12,6 +14,13 @@ from fedscale.core.execution.client import Client
 from fedscale.core.logger.execution import logDir
 from fedscale.core.config_parser import args
 from fedscale.utils.compressor.topk import TopKCompressor
+
+def set_bn_eval(m):
+    # print(m.__dict__)
+    classname = m.__class__.__name__
+    # print(classname)
+    if classname.find('BatchNorm2d') != -1 or classname.find('bn') != -1:
+        m.eval()
 
 """A customized client for FedDC"""
 class FedDC_Client(Client):
@@ -54,6 +63,15 @@ class FedDC_Client(Client):
 
         model = model.to(device=device)
         model.train()
+        # for module in model.modules():
+        #     # print(module)
+        #     if isinstance(module, nn.BatchNorm2d):
+        #         if hasattr(module, 'weight'):
+        #             module.weight.requires_grad_(False)
+        #         if hasattr(module, 'bias'):
+        #             module.bias.requires_grad_(False)
+        #         module.eval()
+        # model.apply(set_bn_eval)
 
         # TODO ===== load compensation =====
         temp_path = os.path.join(logDir, 'compensation_c'+str(clientId)+'.pth.tar')
@@ -87,6 +105,7 @@ class FedDC_Client(Client):
         last_model_copy = [param.data.clone() for param in model.state_dict().values()]
 
         optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
+        # optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9)
         if args.model == "lr":
             criterion = torch.nn.CrossEntropyLoss().to(device=device)
         else:
@@ -116,7 +135,7 @@ class FedDC_Client(Client):
 
                 # only measure the loss of the first epoch
                 epoch_train_loss = (1. - conf.loss_decay) * epoch_train_loss + conf.loss_decay * loss.item()
-
+                # logging.info(f"local {clientId} {completed_steps} {loss.item()}")
                 # ========= Define the backward loss ==============
                 optimizer.zero_grad()
                 loss.backward()
@@ -135,31 +154,34 @@ class FedDC_Client(Client):
         # ===== calculate gradient =====
         for idx, param in enumerate(model.state_dict().values()):
             gradient_tmp = (last_model_copy[idx] - param.data).to('cpu').type(torch.FloatTensor)
+            # if agg_weight > 100:
+            #     print(keys[idx], gradient_tmp)
 
             # TODO ===== apply compensation =====
             if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+            # if not ('num_batches_tracked' in keys[idx]):
                 compensation_model[idx] = compensation_model[idx].to('cpu')
                 gradient_tmp += (compensation_model[idx] / agg_weight)
             
-            gradient_original = gradient_tmp.clone().detach()
+                gradient_original = gradient_tmp.clone().detach()
 
-            # ===== apply compression =====
-            if fl_method == 'STC' or epochNo % regenerate_epoch == 1:
-                # local masking
-                gradient_tmp, ctx_tmp = compressor.compress(
-                        gradient_tmp)
+                # ===== apply compression =====
+                if fl_method == 'STC' or epochNo % regenerate_epoch == 1:
+                    # local masking
+                    gradient_tmp, ctx_tmp = compressor.compress(
+                            gradient_tmp)
 
-                gradient_tmp = compressor.decompress(gradient_tmp, ctx_tmp)
-            else:
-                # pass
-                # shared masking + local mask
-                max_value = float(gradient_tmp.abs().max())
-                largest_tmp = gradient_tmp.clone().detach()
-                largest_tmp[mask_model[idx] == True] = max_value
-                largest_tmp, ctx_tmp = compressor.compress(largest_tmp)
-                largest_tmp = compressor.decompress(largest_tmp, ctx_tmp)
-                largest_tmp = largest_tmp.to(torch.bool)
-                gradient_tmp[largest_tmp != True] = 0.0
+                    gradient_tmp = compressor.decompress(gradient_tmp, ctx_tmp)
+                else:
+                    # pass
+                    # shared masking + local mask
+                    max_value = float(gradient_tmp.abs().max())
+                    largest_tmp = gradient_tmp.clone().detach()
+                    largest_tmp[mask_model[idx] == True] = max_value
+                    largest_tmp, ctx_tmp = compressor.compress(largest_tmp)
+                    largest_tmp = compressor.decompress(largest_tmp, ctx_tmp)
+                    largest_tmp = largest_tmp.to(torch.bool)
+                    gradient_tmp[largest_tmp != True] = 0.0
 
             # ===== update compensation ======
             gradient_original = gradient_original.to('cpu')
@@ -176,10 +198,10 @@ class FedDC_Client(Client):
         # model = model.to(device="cpu")
 
         # ===== TODO save running mean =====       
-        # save_model = []
-        # for idx, param in enumerate(model.state_dict().values()):
-        #     tmp = param.data.clone().detach().to(device="cpu")
-        #     save_model.append(tmp)
+        save_model = []
+        for idx, param in enumerate(model.state_dict().values()):
+            tmp = param.data.clone().detach().to(device="cpu")
+            save_model.append(tmp)
         # self.save_compensation(save_model, temp_path_running)
 
         # ===== collect results =====
