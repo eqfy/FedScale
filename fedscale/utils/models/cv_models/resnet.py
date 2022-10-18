@@ -38,7 +38,7 @@ class ResBlock(nn.Module):
                  out_channels,
                  stride,
                  bias=False,
-                 use_bn=True):
+                 use_bn=False):
         super(ResBlock, self).__init__()
         self.conv1 = conv3x3_block(
             in_channels=in_channels,
@@ -147,7 +147,7 @@ class ResUnit(nn.Module):
                  padding=1,
                  dilation=1,
                  bias=False,
-                 use_bn=True,
+                 use_bn=False,
                  bottleneck=True,
                  conv1_stride=False):
         super(ResUnit, self).__init__()

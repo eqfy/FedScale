@@ -222,6 +222,8 @@ class FedDC_Aggregator(Aggregator):
 
         # ================== Aggregate weights ======================
         self.update_lock.acquire()
+        # download_ratio = check_model_update_overhead(0, self.round - 1, self.model, self.mask_record_list)
+        # logging.info(f"Download sparsification: {results['clientId']} {download_ratio}")
 
         self.model_in_update += 1
         self.aggregate_client_weights(results)
@@ -249,6 +251,7 @@ class FedDC_Aggregator(Aggregator):
             # ==== update global model =====
             model_state_dict = self.model.state_dict()
             for idx, param in enumerate(model_state_dict.values()):
+                # logging.info(f"weight: {idx} {self.compressed_gradient[idx]}")
                 param.data = param.data.to(device=self.device).to(dtype=torch.float32) - self.compressed_gradient[idx]
             self.model.load_state_dict(model_state_dict)
             
@@ -287,11 +290,19 @@ class FedDC_Aggregator(Aggregator):
         # ===== initialize compressed gradients =====
         if self.model_in_update == 1:
             self.compressed_gradient = [torch.zeros_like(param.data).to(device=self.device).to(dtype=torch.float32) for param in self.model.state_dict().values()]
-
+        
         prob = self.get_gradient_weight(results['clientId'])
+        # prob = (1.0 / self.tasks_round)
+        # logging.info(f"weight: {self.get_gradient_weight(results['clientId'])} {results['clientId']}")
+        keys = [] 
+        for idx, key in enumerate(self.model.state_dict()):
+            keys.append(key)
         for idx, param in enumerate(self.model.state_dict().values()):
-            self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
-
+            if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+                self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * prob)
+            else:
+                self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * (1.0/self.tasks_round))
+            
     def get_gradient_weight(self, clientId):
         prob = 0
         if self.sampling_strategy == "STICKY":
@@ -320,7 +331,15 @@ class FedDC_Aggregator(Aggregator):
     def apply_and_update_mask(self):
         compressor_tot = TopKCompressor(compress_ratio=self.total_mask_ratio)
         compressor_shr = TopKCompressor(compress_ratio=self.shared_mask_ratio)
+
+        keys = [] 
+        for idx, key in enumerate(self.model.state_dict()):
+            keys.append(key)
+        
         for idx, param in enumerate(self.model.state_dict().values()):
+            if (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+                continue
+            
             # --- STC ---
             if self.fl_method == "STC" or self.round % self.regenerate_epoch == 1:
                 # local mask
@@ -340,6 +359,9 @@ class FedDC_Aggregator(Aggregator):
 
         # --- update shared mask ---
         for idx, param in enumerate(self.model.state_dict().values()):
+            if (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+                continue
+
             determined_mask = self.compressed_gradient[idx].clone().detach()
             determined_mask, ctx_tmp = compressor_shr.compress(determined_mask)
             determined_mask = compressor_shr.decompress(determined_mask, ctx_tmp)
