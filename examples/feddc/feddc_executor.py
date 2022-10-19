@@ -27,7 +27,6 @@ class FedDC_Executor(Executor):
         self.temp_mask_path = os.path.join(
             execution.logDir, 'mask_'+str(args.this_rank)+'.pth.tar')
         self.mask = []
-        self.epoch = 0
 
     def get_client_trainer(self, conf):
         return FedDC_Client(conf)

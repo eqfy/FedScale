@@ -10,7 +10,7 @@ from fedscale.core.internal.client import Client
 class clientManager(object):
 
     def __init__(self, mode, args, sample_seed=233):
-        self.Clients = {}
+        self.Clients: Dict[str, Client]= {}
         self.clientOnHosts = {}
         self.mode = mode
         self.filter_less = args.filter_less
@@ -62,7 +62,7 @@ class clientManager(object):
         user_trace = None if self.user_trace is None else self.user_trace[self.user_trace_keys[int(
             clientId) % len(self.user_trace)]]
 
-        self.Clients[uniqueId] = Client(hostId, clientId, speed, user_trace)
+        self.Clients[uniqueId] = Client(hostId, clientId, speed, augmentation_factor=self.args.augmentation_factor, upload_factor=self.args.upload_factor, download_factor=self.args.download_factor, traces=user_trace)
 
         # remove clients
         if size >= self.filter_less and size <= self.filter_more:
@@ -213,6 +213,7 @@ class clientManager(object):
     def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0):
         self.count += 1
     
+        logging.info(f"Sticky sampling num {numOfClients} K {K} Change {change_num}")
         clients_online = self.getFeasibleClients(cur_time)
        
         # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
@@ -220,19 +221,21 @@ class clientManager(object):
         if len(clients_online) <= numOfClients:
             return clients_online
 
-        pickled_clients = None
         pickled_sticky_clients = []
+        pickled_changes = []
 
         if len(self.cur_group) == 0:
             # initalize the group
             self.rng.shuffle(clients_online)
             client_len = min(K, len(clients_online) -1)
             self.cur_group = clients_online[:client_len]
-            pickled_clients = self.cur_group[:numOfClients]
+            # We treat the clients sampled from the first round as sticky clients
+            pickled_changes = self.cur_group[:min(numOfClients, client_len)]
         else:
             
             # randomly delete some clients
             self.rng.shuffle(self.cur_group)
+            logging.info(f"num {numOfClients} change {change_num}")
             pickled_sticky_clients = self.cur_group[:(numOfClients - change_num)]
             # randomly include some clients
             self.rng.shuffle(clients_online)
@@ -244,15 +247,9 @@ class clientManager(object):
                 pickled_changes.append(client)
                 if len(pickled_changes) == client_len:
                     break
-            change_len = len(pickled_changes)
             
-            logging.info(f"Selected pickled clients: {sorted(pickled_sticky_clients)} {sorted(pickled_changes)} {len(self.cur_group)}")
-            pickled_clients = pickled_sticky_clients + pickled_changes
-            
-            self.cur_group = self.cur_group[:-change_len] + pickled_changes
-            self.picked_changes = pickled_changes
-        # logging.info(f"pickled clients: len {len(pickled_clients)} {pickled_clients}")
-        return pickled_clients, set(pickled_sticky_clients)
+            logging.info(f"Selected sticky clients ({len(pickled_sticky_clients)}): {sorted(pickled_sticky_clients)}\nSelected new clients({len(pickled_changes)}) {sorted(pickled_changes)}")
+        return pickled_sticky_clients, pickled_changes
 
     def select_participants(self, num_of_clients: int, cur_time: float=0) -> List[int]:
         """Select participating clients for current execution task.

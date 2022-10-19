@@ -50,10 +50,10 @@ class FedDC_Client(Client):
 
         np.random.seed(1)
         logging.info(f"Epoch: {epochNo}")
-        # TODO Verify that this works, I've directly imported the args from config_parser and logDir from execution
         total_mask_ratio = args.total_mask_ratio
         fl_method = args.fl_method
         regenerate_epoch = args.regenerate_epoch
+        compensation_dir = os.path.join(args.compensation_dir, args.job_name, args.time_stamp)
 
         trained_unique_samples = min(len(client_data.dataset), conf.local_steps* conf.batch_size)
 
@@ -73,8 +73,10 @@ class FedDC_Client(Client):
         #         module.eval()
         # model.apply(set_bn_eval)
 
-        # TODO ===== load compensation =====
-        temp_path = os.path.join(logDir, 'compensation_c'+str(clientId)+'.pth.tar')
+        # ===== load compensation =====
+        if not os.path.exists(compensation_dir):
+            os.makedirs(compensation_dir)
+        temp_path = os.path.join(compensation_dir, 'compensation_c'+str(clientId)+'.pth.tar')
         compensation_model = []
         # temp_path_2 = os.path.join(logDir, 'gradient_c'+str(clientId)+'.pth.tar')
         if (agg_weight > 100.0) or (not os.path.exists(temp_path)):

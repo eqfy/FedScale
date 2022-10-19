@@ -229,8 +229,9 @@ parser.add_argument('--sticky_group_change_num', type=int, default=20, help="num
 parser.add_argument('--fl_method', type=str, default="FedDC", help="FL method")
 parser.add_argument('--regenerate_epoch', type=int, default=10, help="number of epochs before renegerating mask")
 parser.add_argument('--augmentation_factor', type=float, default=3.0, help="Augmentation factor for finding client compute latency")
-parser.add_argument('--upload_factor', type=float, default=1.0, help="Download factor for finding client download latency")
+parser.add_argument('--upload_factor', type=float, default=1.0, help="Upload factor for finding client upload latency")
 parser.add_argument('--download_factor', type=float, default=1.0, help="Download factor for finding client download latency")
+parser.add_argument('--compensation_dir', type=str, default="/mnt/fl/benchmark/compensation", help="Directory for storing compensation")
 
 
 args, unknown = parser.parse_known_args()
