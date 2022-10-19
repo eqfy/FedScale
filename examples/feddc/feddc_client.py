@@ -73,7 +73,9 @@ class FedDC_Client(Client):
         #         module.eval()
         # model.apply(set_bn_eval)
 
-        # TODO ===== load compensation =====
+        # ===== load compensation =====
+        if not os.path.exists(compensation_dir):
+            os.makedirs(compensation_dir)
         temp_path = os.path.join(compensation_dir, 'compensation_c'+str(clientId)+'.pth.tar')
         compensation_model = []
         # temp_path_2 = os.path.join(logDir, 'gradient_c'+str(clientId)+'.pth.tar')
