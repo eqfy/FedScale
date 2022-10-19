@@ -53,7 +53,7 @@ class FedDC_Client(Client):
         total_mask_ratio = args.total_mask_ratio
         fl_method = args.fl_method
         regenerate_epoch = args.regenerate_epoch
-        compensation_dir = args.compensation_dir
+        compensation_dir = os.path.join(args.compensation_dir, args.job_name, args.time_stamp)
 
         trained_unique_samples = min(len(client_data.dataset), conf.local_steps* conf.batch_size)
 
