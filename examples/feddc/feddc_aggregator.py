@@ -512,19 +512,35 @@ class FedDC_Aggregator(Aggregator):
             )
             self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
 
-            (sticky_to_run, sticky_stragglers, sticky_lost, sticky_virtual_client_clock, 
-            sticky_round_duration, sticky_flatten_client_duration) = self.tictak_client_tasks(
-                self.sampled_sticky_clients, self.args.num_participants - self.args.sticky_group_change_num)
+            # Randomly choose from online sticky clients
+            sticky_to_run_count = self.args.num_participants - self.args.sticky_group_change_num
+            (sticky_fast, sticky_slow, sticky_lost, sticky_virtual_client_clock, 
+            _, sticky_flatten_client_duration) = self.tictak_client_tasks(
+                self.sampled_sticky_clients, sticky_to_run_count)
+            all_sticky = sticky_fast + sticky_slow
+            random.shuffle(all_sticky)
+            sticky_to_run = all_sticky[:min(sticky_to_run_count, len(all_sticky))]
+            sticky_ignored = all_sticky[min(sticky_to_run_count, len(all_sticky)):]
+            logging.error(all_sticky)
+            logging.error(sticky_to_run)
+            logging.error(sticky_ignored)
+            if (len(self.sampled_sticky_clients) > 0): # There are no sticky clients in round 1
+                slowest_sticky_client_id = max(sticky_to_run, key=lambda k: sticky_virtual_client_clock[k]['round'])
+                sticky_round_duration = sticky_virtual_client_clock[slowest_sticky_client_id]['round']
+            else:
+                sticky_round_duration = 0
+            logging.info(f"Selected sticky participants to run: {sorted(sticky_to_run)}\nunselected sticky participants: {sorted(sticky_ignored)}\nsticky lost: {sorted(sticky_lost)}")
+
+            # Choose fastest online changed clients
             (change_to_run, change_stragglers, change_lost, change_virtual_client_clock, 
             change_round_duration, change_flatten_client_duration) = self.tictak_client_tasks(
                 self.sampled_changed_clients, 
                 self.args.sticky_group_change_num if self.round > 1 else self.args.num_participants)
+            logging.info(f"Selected change participants to run: {sorted(change_to_run)}\nchange stragglers: {sorted(change_stragglers)}\nchange lost: {sorted(change_lost)}")
 
-            logging.info(f"Selected sticky participants to run: {sorted(sticky_to_run)}\nstragglers: {sorted(sticky_stragglers)}\nlost: {sorted(sticky_lost)}")
-            logging.info(f"Selected change participants to run: {sorted(change_to_run)}\nstragglers: {sorted(change_stragglers)}\nlost: {sorted(change_lost)}")
-
+            # Combine sticky and changed clients together
             self.clients_to_run = sticky_to_run + change_to_run
-            self.round_stragglers = sticky_stragglers + change_stragglers
+            self.round_stragglers = sticky_ignored + change_stragglers
             self.round_lost_clients = sticky_lost + change_lost
             self.virtual_client_clock = {**sticky_virtual_client_clock, **change_virtual_client_clock}
             self.round_duration = max(sticky_round_duration, change_round_duration)
