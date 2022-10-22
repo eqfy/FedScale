@@ -132,6 +132,9 @@ class FedDC_Client(Client):
                 (data, target) = data_pair
                 data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
+                if args.task == "speech":
+                    data = torch.unsqueeze(data, 1).to(device=device)
+
                 output = model(data)
                 loss = criterion(output, target)
 

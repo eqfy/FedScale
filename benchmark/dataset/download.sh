@@ -48,6 +48,8 @@ speech()
 {
     if [ ! -d "${DIR}/speech_commands/train/" ];
     then
+        mkdir -p ${DIR}/speech_commands
+
         echo "Downloading Speech Commands dataset(about 2.4GB)..."
         wget -O ${DIR}/speech_commands/google_speech.tar.gz https://fedscale.eecs.umich.edu/dataset/google_speech.tar.gz
 
@@ -55,7 +57,7 @@ speech()
         tar -xf ${DIR}/speech_commands/google_speech.tar.gz -C ${DIR}
 
         echo "Removing compressed file..."
-        rm -f ${DIR}/speech_commands/google_speech.tar.gz
+        rm -rf ${DIR}/speech_commands
 
         echo -e "${GREEN}Speech Commands dataset downloaded!${NC}"
     else
@@ -67,6 +69,8 @@ open_images()
 {
     if [ ! -d "${DIR}/open_images/train/" ];
     then
+        mkdir -p ${DIR}/open_images
+
         echo "Downloading Open Images dataset(about 66GB)..."
         wget -O ${DIR}/open_images.tar.gz https://fedscale.eecs.umich.edu/dataset/openImage.tar.gz
 
@@ -86,6 +90,8 @@ amazon_review()
 {
     if [ ! -d "${DIR}/amazon_review/train/" ];
     then
+        mkdir -p ${DIR}/amazon_review
+
         echo "Downloading Amazon Review dataset(about 11GB)..."
         wget -O ${DIR}/amazon_review.tar.gz https://fedscale.eecs.umich.edu/dataset/amazon_review.tar.gz
 
@@ -105,6 +111,8 @@ charades()
 {
     if [ ! -d "${DIR}/charades/train/" ];
     then
+        mkdir -p ${DIR}/charades
+
         echo "Downloading Charades dataset(about 15GB)..."
         wget -O ${DIR}/charades.tar.gz https://fedscale.eecs.umich.edu/dataset/charades_v1.tar.gz
 
@@ -124,6 +132,8 @@ europarl()
 {
     if [ ! -d "${DIR}/europarl/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/europarl
+
         echo "Downloading europarl dataset(about 458M)..."
         wget -O ${DIR}/europarl.tar.gz https://fedscale.eecs.umich.edu/dataset/europarl.tar.gz
 
@@ -143,6 +153,8 @@ go()
 {
     if [ ! -d "${DIR}/go/train/" ];
     then
+        mkdir -p ${DIR}/go
+
         echo "Downloading go dataset(about 1.7G)..."
         wget -O ${DIR}/go.tar.gz https://fedscale.eecs.umich.edu/dataset/go-dataset.tar.gz
 
@@ -162,6 +174,8 @@ inaturalist()
 {
     if [ ! -d "${DIR}/inaturalist/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/inaturalist
+
         echo "Downloading inaturalist dataset ..."
         wget -O ${DIR}/inaturalist.tar.gz https://fedscale.eecs.umich.edu/dataset/inaturalist.tar.gz
 
@@ -182,6 +196,8 @@ libriTTS()
 {
     if [ ! -d "${DIR}/libriTTS/train/" ];
     then
+        mkdir -p ${DIR}/libriTTS
+
         echo "Downloading libriTTS dataset(about 78G)..."
         wget -O ${DIR}/libriTTS.tar.gz https://fedscale.eecs.umich.edu/dataset/libriTTS.tar.gz
 
@@ -201,6 +217,7 @@ open_images_detection()
 {
     if [ ! -d "${DIR}/open_images_detection/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/open_images_detection
 
         echo "Downloading open_images_detection dataset(about 451M)..."
         wget -O ${DIR}/openimage_detection.tar.gz https://fedscale.eecs.umich.edu/dataset/openimage_detection.tar.gz
@@ -221,6 +238,8 @@ reddit()
 {
     if [ ! -d "${DIR}/reddit/train/" ];
     then
+        mkdir -p ${DIR}/reddit
+
         echo "Downloading reddit dataset(about 25G)..."
         wget -O ${DIR}/reddit.tar.gz https://fedscale.eecs.umich.edu/dataset/reddit.tar.gz
 
@@ -240,6 +259,8 @@ blog()
 {
     if [ ! -d "${DIR}/blog/train/" ];
     then
+        mkdir -p ${DIR}/blog
+
         echo "Downloading blog dataset(about 800M)..."
         wget -O ${DIR}/blog.tar.gz https://fedscale.eecs.umich.edu/dataset/blog.tar.gz
 
@@ -259,6 +280,8 @@ stackoverflow()
 {
     if [ ! -d "${DIR}/stackoverflow/train/" ];
     then
+        mkdir -p ${DIR}/stackoverflow
+
         echo "Downloading stackoverflow dataset(about 800M)..."
         wget -O ${DIR}/stackoverflow.tar.gz https://fedscale.eecs.umich.edu/dataset/stackoverflow.tar.gz
 
@@ -278,6 +301,8 @@ taobao()
 {
     if [ ! -d "${DIR}/taobao/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/taobao
+
         echo "Downloading taobao dataset(about 185M)..."
         wget -O ${DIR}/taobao.tar.gz https://fedscale.eecs.umich.edu/dataset/taobao.tar.gz
 
@@ -297,6 +322,8 @@ taxi()
 {
     if [ ! -d "${DIR}/taxi_traj/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/taxi_traj
+
         echo "Downloading taxi prediction dataset(about 504M)..."
         wget -O ${DIR}/taxi_traj.tar.gz https://fedscale.eecs.umich.edu/dataset/taxi_traj.tar.gz
 
@@ -316,6 +343,8 @@ waymo()
 {
     if [ ! -d "${DIR}/waymo/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/waymo
+
         echo "Downloading waymo dataset(about 74M)..."
         wget -O ${DIR}/waymo.tar.gz https://fedscale.eecs.umich.edu/dataset/waymo.tar.gz
 
@@ -335,6 +364,8 @@ common_voice()
 {
     if [ ! -d "${DIR}/common_voice/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/common_voice
+
         echo "Downloading common_voice dataset(about 87G)..."
         wget -O ${DIR}/common_voice.tar.gz https://fedscale.eecs.umich.edu/dataset/common_voice.tar.gz
 
@@ -354,6 +385,8 @@ femnist()
 {
     if [ ! -d "${DIR}/femnist/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/femnist
+
         echo "Downloading FEMNIST dataset(about 327M)..."
         wget -O ${DIR}/femnist.tar.gz https://fedscale.eecs.umich.edu/dataset/femnist.tar.gz
 
@@ -373,6 +406,8 @@ puffer()
 {
     if [ ! -d "${DIR}/puffer" ];
     then
+        mkdir -p ${DIR}/puffer
+
         echo "Downloading Puffer dataset(about 2G)..."
         wget -O ${DIR}/puffer.tar.gz https://fedscale.eecs.umich.edu/dataset/puffer.tar.gz
 
@@ -392,6 +427,8 @@ landmark()
 {
     if [ ! -d "${DIR}/landmark/client_data_mapping/" ];
     then
+        mkdir -p ${DIR}/landmark
+
         echo "Downloading Google Landmark dataset(about 954Ms)..."
         wget -O ${DIR}/landmark.tar.gz https://fedscale.eecs.umich.edu/dataset/landmark.tar.gz
 
@@ -411,6 +448,8 @@ coqa()
 {
     if [ ! -d "${DIR}/coqa/client_data_mapping" ];
     then
+        mkdir -p ${DIR}/coqa
+
         echo "Downloading CoQA dataset(about 7.9M)..."
         wget -O ${DIR}/coqa.tar.gz https://fedscale.eecs.umich.edu/dataset/coqa.tar.gz
 

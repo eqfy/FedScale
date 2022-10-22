@@ -48,7 +48,7 @@ class Sparsification(object):
         mask_accum_list = []
         
         for p_idx, key in enumerate(global_model.state_dict().keys()):
-            mask_accum_list.append(torch.zeros_like(global_model.state_dict()[key], dtype=torch.bool).to(device))
+            mask_accum_list.append(torch.zeros_like(global_model.state_dict()[key], dtype=torch.bool, device=torch.device("cpu")))
 
         for idx in range(l, r):
             for p_idx, key in enumerate(global_model.state_dict().keys()):

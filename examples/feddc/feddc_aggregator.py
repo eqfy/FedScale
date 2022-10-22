@@ -90,7 +90,7 @@ class FedDC_Aggregator(Aggregator):
         self.model_bitmap_size = self.model_update_size / 32
         self.client_profiles = self.load_client_profile(
             file_path=self.args.device_conf_file)
-        self.last_update_index = [0 for _ in range(self.dataset_total_worker + 1)]
+        self.last_update_index = [0 for _ in range(self.dataset_total_worker * 2)] # FIXME
         self.event_monitor()
 
     def get_shared_mask(self):
@@ -257,7 +257,7 @@ class FedDC_Aggregator(Aggregator):
             # ===== update mask list =====
             mask_list = []
             for p_idx, key in enumerate(self.model.state_dict().keys()):
-                mask = (self.compressed_gradient[p_idx] != 0).to(self.device)
+                mask = (self.compressed_gradient[p_idx] != 0).to(device=torch.device("cpu"))
                 mask_list.append(mask)
 
             self.mask_record_list.append(mask_list)
@@ -521,9 +521,6 @@ class FedDC_Aggregator(Aggregator):
             random.shuffle(all_sticky)
             sticky_to_run = all_sticky[:min(sticky_to_run_count, len(all_sticky))]
             sticky_ignored = all_sticky[min(sticky_to_run_count, len(all_sticky)):]
-            logging.error(all_sticky)
-            logging.error(sticky_to_run)
-            logging.error(sticky_ignored)
             if (len(self.sampled_sticky_clients) > 0): # There are no sticky clients in round 1
                 slowest_sticky_client_id = max(sticky_to_run, key=lambda k: sticky_virtual_client_clock[k]['round'])
                 sticky_round_duration = sticky_virtual_client_clock[slowest_sticky_client_id]['round']
