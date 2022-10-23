@@ -49,7 +49,6 @@ class FedDC_Client(Client):
         device = conf.device
 
         np.random.seed(1)
-        logging.info(f"Epoch: {epochNo}")
         total_mask_ratio = args.total_mask_ratio
         fl_method = args.fl_method
         regenerate_epoch = args.regenerate_epoch
@@ -88,7 +87,7 @@ class FedDC_Client(Client):
                 # gradient_model.append(tmp_2)
         else:
             compensation_model = self.load_compensation(temp_path)
-        compensation_model = [c.to(device=device) for c in compensation_model]
+            compensation_model = [c.to(device=device) for c in compensation_model]
 
         # ===== load running mean ====
         keys = [] 
@@ -126,13 +125,10 @@ class FedDC_Client(Client):
         # agg_weight = 1.0
         # test
         # TODO: One may hope to run fixed number of epochs, instead of iterations
-
-        client_data = [(Variable(data).to(device=device), Variable(target).to(device=device)) for (data, target) in client_data]
         while completed_steps < conf.local_steps:
-            # self.train_step(client_data, conf, model, optimizer, criterion) # TODO it is probably ok to just use this if we do not consider changes for APF
             for data_pair in client_data:
                 (data, target) = data_pair
-                # data, target = Variable(data).to(device=device), Variable(target).to(device=device)
+                data, target = Variable(data).to(device=device), Variable(target).to(device=device)
 
                 if args.task == "speech":
                     data = torch.unsqueeze(data, 1)
