@@ -31,7 +31,7 @@ setup_commands:
 # Default parameters are specified in config_parser.py, wherein more description of the parameter can be found
 
 job_conf: 
-    - job_name: sg30_speech                  # Generate logs under this folder: log_path/job_name/time_stamp
+    - job_name: sm0.16_speech                   # Generate logs under this folder: log_path/job_name/time_stamp
     - task: speech
     - log_path: /mnt/fl/benchmark # Path of log files
     - num_participants: 30                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
@@ -57,13 +57,13 @@ job_conf:
     - overcommitment: 1.3
     - fl_method: FedDC
     - sampling_strategy: STICKY
-    - sticky_group_size: 30
+    - sticky_group_size: 120
     - sticky_group_change_num: 6
     # - malicious_factor: 4
     - use_cuda: True
     - cuda_device: cuda:0
     - total_mask_ratio: 0.3
-    - shared_mask_ratio: 0.24
+    - shared_mask_ratio: 0.16
     - augmentation_factor: 0.4
     - download_factor: 0.8
     - upload_factor: 1.2
