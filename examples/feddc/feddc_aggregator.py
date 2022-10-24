@@ -547,8 +547,8 @@ class FedDC_Aggregator(Aggregator):
 
             # Make sure that there are change_num number of new clients added each epoch 
             if len(change_to_run) < self.sticky_group_change_num:
-                change_to_run.extend(random.sample(change_stragglers, self.sticky_group_change_num - len(change_to_run)))
-            self.client_manager.cur_group = self.client_manager.cur_group[:-self.args.sticky_group_change_num] + change_to_run
+                change_to_run.extend(random.sample(change_lost, min(self.sticky_group_change_num - len(change_to_run), len(change_lost))))
+            self.client_manager.cur_group = self.client_manager.cur_group[:-len(change_to_run)] + change_to_run
         else:
             self.sampled_participants = self.select_participants(
                 select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
