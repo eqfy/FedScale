@@ -38,9 +38,9 @@ class RoundEvaluator(object):
         self.cur_durations = {}
         self.cur_used_bandwidths = {}
 
-    def recordClient(self, client_id, dl_size, ul_size, duration, prefetch_dl_size = 0):
+    def recordClient(self, client_id, dl_size, ul_size, duration, dl_bw=0, ul_bw=0, prefetch_dl_size = 0):
         self.cur_durations[client_id] = duration
-        self.cur_used_bandwidths[client_id] = {"upstream": ul_size, "downstream": dl_size, "prefetch": prefetch_dl_size}
+        self.cur_used_bandwidths[client_id] = {"upstream": ul_size, "downstream": dl_size, "prefetch": prefetch_dl_size, "dl_bw": dl_bw, "ul_bw": ul_bw}
 
 
     def recordRoundCompletion(self, clients_to_run, dummy_clients, slowest_client_id):

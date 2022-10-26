@@ -67,4 +67,4 @@ job_conf:
     - download_factor: 0.8
     - upload_factor: 1.2
     - regenerate_epoch: 10000
-
+    - overcommit_weight: 0.4 # The % of overcommitted clients allocated to the change group

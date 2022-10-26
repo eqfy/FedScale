@@ -232,6 +232,7 @@ parser.add_argument('--augmentation_factor', type=float, default=3.0, help="Augm
 parser.add_argument('--upload_factor', type=float, default=1.0, help="Upload factor for finding client upload latency")
 parser.add_argument('--download_factor', type=float, default=1.0, help="Download factor for finding client download latency")
 parser.add_argument('--compensation_dir', type=str, default="/mnt/fl/benchmark/compensation", help="Directory for storing compensation")
+parser.add_argument('--overcommit_weight', type=float, default=-1, help="How much overcommitment is allocated to sticky vs non-sticky group. If -1, then overcommitment is applied uniformly/")
 
 
 args, unknown = parser.parse_known_args()

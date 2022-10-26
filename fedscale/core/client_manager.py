@@ -101,6 +101,9 @@ class clientManager(object):
             upload_size=upload_size, download_size=download_size
         )
 
+    def getBwInfo(self, clientId):
+        return self.Clients[self.getUniqueId(0, clientId)].dl_bandwidth,  self.Clients[self.getUniqueId(0, clientId)].ul_bandwidth
+
     def registerSpeed(self, hostId, clientId, speed):
         uniqueId = self.getUniqueId(hostId, clientId)
         self.Clients[uniqueId].speed = speed
@@ -210,7 +213,7 @@ class clientManager(object):
         return self.Clients[self.getUniqueId(0, clientId)].isActive(cur_time)
 
     # Sticky sampling
-    def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0):
+    def select_participants_sticky(self, numOfClients, cur_time = 0, K = 0, change_num = 0, overcommit=1.3):
         self.count += 1
     
         logging.info(f"Sticky sampling num {numOfClients} K {K} Change {change_num}")
@@ -229,7 +232,10 @@ class clientManager(object):
             # initalize the group
             self.rng.shuffle(clients_online)
             client_len = min(K, len(clients_online) -1)
-            self.cur_group = clients_online[:client_len]
+            temp_group = clients_online[:round(client_len * overcommit)]
+            temp_group.sort(key=lambda c: min(self.getBwInfo(c)))
+            self.cur_group = temp_group[-client_len:]
+            self.rng.shuffle(self.cur_group)
             # We treat the clients sampled from the first round as sticky clients
             pickled_changes = self.cur_group[:min(numOfClients, client_len)]
         else:
