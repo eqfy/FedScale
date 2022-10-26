@@ -215,6 +215,7 @@ class clientManager(object):
     
         logging.info(f"Sticky sampling num {numOfClients} K {K} Change {change_num}")
         clients_online = self.getFeasibleClients(cur_time)
+        clients_online_set = set(clients_online)
        
         # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
         # logging.info(f"clients online: {clients_online}")
@@ -235,8 +236,10 @@ class clientManager(object):
             
             # randomly delete some clients
             self.rng.shuffle(self.cur_group)
+            # Find the clients that are available in the sticky group
+            online_sticky_group = [i for i in self.cur_group if i in clients_online_set]
             logging.info(f"num {numOfClients} change {change_num}")
-            pickled_sticky_clients = self.cur_group[:(numOfClients - change_num)]
+            pickled_sticky_clients = online_sticky_group[:(numOfClients - change_num)]
             # randomly include some clients
             self.rng.shuffle(clients_online)
             client_len = min(change_num, len(clients_online)-1)
