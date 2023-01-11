@@ -2,15 +2,14 @@
 
 # ========== Cluster configuration ========== 
 # ip address of the parameter server (need 1 GPU process)
-ps_ip: 10.0.2.14
+ps_ip: 10.0.2.18
 
 # ip address of each worker:# of available gpus process on each gpu in this node
 # Note that if we collocate ps and worker on same GPU, then we need to decrease this number of available processes on that GPU by 1
 # E.g., master node has 4 available processes, then 1 for the ps, and worker should be set to: worker:3
 worker_ips: 
-    - 10.0.2.14:[2]
-    - 10.0.2.15:[3]
-
+    - 10.0.2.18:[1]
+    
 exp_path: $FEDSCALE_HOME/fedscale/core
 
 # Entry function of executor and aggregator under $exp_path
@@ -32,7 +31,7 @@ setup_commands:
 # Default parameters are specified in config_parser.py, wherein more description of the parameter can be found
 
 job_conf: 
-    - job_name: sm0.08_femnist1         # Generate logs under this folder: log_path/job_name/time_stamp
+    - job_name: dryrun                 # Generate logs under this folder: log_path/job_name/time_stamp
     - log_path: /mnt/fl/benchmark # Path of log files
     - num_participants: 30                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - dataset_total_worker: 2800
@@ -60,10 +59,12 @@ job_conf:
     - sticky_group_size: 120
     - sticky_group_change_num: 6
     # - malicious_factor: 4
-    - use_cuda: False
-    - total_mask_ratio: 0.3
-    - shared_mask_ratio: 0.12
+    - use_cuda: True
+    - cuda_device: cuda:0
+    - total_mask_ratio: 0.2
+    - shared_mask_ratio: 0.16
     - augmentation_factor: 0.4
     - download_factor: 0.8
     - upload_factor: 1.2
-    - overcommit_weight: 0.4 # The % of overcommitted clients allocated to the change group
+    - overcommit_weight: 0.88 # The % of overcommitted clients allocated to the change group
+

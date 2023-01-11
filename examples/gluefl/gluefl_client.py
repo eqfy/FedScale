@@ -22,8 +22,8 @@ def set_bn_eval(m):
     if classname.find('BatchNorm2d') != -1 or classname.find('bn') != -1:
         m.eval()
 
-"""A customized client for FedDC"""
-class FedDC_Client(Client):
+"""A customized client for GlueFL"""
+class GlueflClient(Client):
     """Basic client component in Federated Learning"""
 
     def load_compensation(self, temp_path):

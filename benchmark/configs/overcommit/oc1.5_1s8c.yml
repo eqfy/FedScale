@@ -13,9 +13,9 @@ worker_ips:
 exp_path: $FEDSCALE_HOME/fedscale/core
 
 # Entry function of executor and aggregator under $exp_path
-executor_entry: ../../examples/feddc/feddc_executor.py
+executor_entry: ../../examples/gluefl/gluefl_executor.py
 
-aggregator_entry: ../../examples/feddc/feddc_aggregator.py
+aggregator_entry: ../../examples/gluefl/gluefl_aggregator.py
 
 auth:
     ssh_user: "fedlearn"
@@ -54,7 +54,7 @@ job_conf:
     - batch_size: 20
     - test_bsz: 32
     - overcommitment: 1.5
-    - fl_method: FedDC
+    - fl_method: GlueFL
     - sampling_strategy: STICKY
     - sticky_group_size: 120
     - sticky_group_change_num: 6

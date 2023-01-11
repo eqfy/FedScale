@@ -15,9 +15,9 @@ worker_ips:
 exp_path: $FEDSCALE_HOME/fedscale/core
 
 # Entry function of executor and aggregator under $exp_path
-executor_entry: ../../examples/feddc/feddc_executor.py
+executor_entry: ../../examples/gluefl/gluefl_executor.py
 
-aggregator_entry: ../../examples/feddc/feddc_aggregator.py
+aggregator_entry: ../../examples/gluefl/gluefl_aggregator.py
 
 auth:
     ssh_user: "fedlearn"

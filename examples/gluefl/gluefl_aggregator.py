@@ -10,7 +10,7 @@ from fedscale.utils.compressor.topk import TopKCompressor
 from fedscale.utils.eval.round_evaluator import RoundEvaluator
 from fedscale.utils.eval.sparsification import Sparsification
 
-class FedDC_Aggregator(Aggregator):
+class GlueflAggregator(Aggregator):
     """Feed aggregator using tensorflow models"""
     def __init__(self, args):
         super().__init__(args)
@@ -158,7 +158,7 @@ class FedDC_Aggregator(Aggregator):
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     self.round_evaluator.recordClient(client_to_run, dl_size, ul_size, exe_cost)
-                elif self.fl_method == "FedDC":
+                elif self.fl_method == "GlueFL":
                     l = self.last_update_index[client_to_run]
                     r = self.round - 1
 
@@ -668,5 +668,5 @@ class FedDC_Aggregator(Aggregator):
                 time.sleep(0.1)
 
 if __name__ == "__main__":
-    aggregator = FedDC_Aggregator(args)
+    aggregator = GlueflAggregator(args)
     aggregator.run()
