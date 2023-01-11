@@ -7,7 +7,7 @@ import sys
 import time
 
 import fedscale.core.channels.job_api_pb2 as job_api_pb2
-from feddc_client import FedDC_Client
+from examples.gluefl.gluefl_client import FedDC_Client
 from fedscale.core import fllibs
 from fedscale.core import commons
 from fedscale.core.execution.executor import Executor

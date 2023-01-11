@@ -1,10 +1,7 @@
 
-import logging
+class ClientMetadata(object):
 
-
-class Client(object):
-
-    def __init__(self, hostId, clientId, speed, augmentation_factor=3.0, upload_factor=1.0, download_factor=1.0, traces=None):
+    def __init__(self, hostId, clientId, speed, traces=None):
         self.hostId = hostId
         self.clientId = clientId
         self.compute_speed = speed['computation']
@@ -12,11 +9,6 @@ class Client(object):
         self.score = 0
         self.traces = traces
         self.behavior_index = 0
-        self.dl_bandwidth = speed['dl_kbps']
-        self.ul_bandwidth = speed['ul_kbps']
-        self.augmentation_factor = augmentation_factor
-        self.upload_factor = upload_factor
-        self.download_factor = download_factor
 
     def getScore(self):
         return self.score
@@ -40,16 +32,14 @@ class Client(object):
 
         return False
 
-    def getCompletionTime(self, batch_size, upload_step, upload_size, download_size):
+    def getCompletionTime(self, batch_size, upload_step, upload_size, download_size, augmentation_factor=3.0):
         """
            Computation latency: compute_speed is the inference latency of models (ms/sample). As reproted in many papers, 
                                 backward-pass takes around 2x the latency, so we multiple it by 3x;
            Communication latency: communication latency = (pull + push)_update_size/bandwidth;
         """
-        # return {'computation': augmentation_factor * batch_size * upload_step*float(self.compute_speed)/1000.,
-        #         'communication': (upload_size+download_size)/float(self.bandwidth)}
-
-        return {'computation':self.augmentation_factor * batch_size * upload_step*float(self.compute_speed)/1000., \
-                'communication': (upload_size+download_size)/float(self.bandwidth), 'downstream': download_size/(self.dl_bandwidth * self.download_factor), \
-                'upstream': upload_size/(self.ul_bandwidth * self.upload_factor)}
-
+        # return (3.0 * batch_size * num_steps/float(self.compute_speed) + model_size/float(self.bandwidth))
+        return {'computation': augmentation_factor * batch_size * upload_step*float(self.compute_speed)/1000.,
+                'communication': (upload_size+download_size)/float(self.bandwidth)}
+        # return (augmentation_factor * batch_size * upload_epoch*float(self.compute_speed)/1000. + \
+        #         (upload_size+download_size)/float(self.bandwidth))
