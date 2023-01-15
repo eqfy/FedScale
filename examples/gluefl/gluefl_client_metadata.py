@@ -1,4 +1,3 @@
-import logging
 from fedscale.core.internal.client_metadata import ClientMetadata
 
 class GlueflClientMetadata(ClientMetadata):

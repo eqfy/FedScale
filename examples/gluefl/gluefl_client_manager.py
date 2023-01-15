@@ -8,7 +8,7 @@ class GlueflClientManager(clientManager):
     def __init__(self, mode, args, sample_seed=233):
         super().__init__(mode, args, sample_seed)
         self.Clients: Dict[str, GlueflClientMetadata]= {}
-        self.cur_group = []
+        self.sticky_group = []
 
     def register_client(self, hostId: int, clientId: int, size: int, speed: Dict[str, float], duration: float=1) -> None:
         """Register client information to the client manager.
@@ -47,46 +47,41 @@ class GlueflClientManager(clientManager):
         logging.info(f"Sticky sampling num {numOfClients} K {K} Change {change_num}")
         clients_online = self.getFeasibleClients(cur_time)
         clients_online_set = set(clients_online)
-       
-        # clients_online = self.getFeasibleClientsGroup(cur_time, groupNo)
         # logging.info(f"clients online: {clients_online}")
         if len(clients_online) <= numOfClients:
             return clients_online
 
-        pickled_sticky_clients = []
-        pickled_changes = []
-
-        if len(self.cur_group) == 0:
-            # initalize the group
+        selected_sticky_clients, selected_new_clients = [], []
+        if len(self.sticky_group) == 0:
+            # initalize the sticky group
             self.rng.shuffle(clients_online)
             client_len = min(K, len(clients_online) -1)
             temp_group = clients_online[:round(client_len * overcommit)]
             temp_group.sort(key=lambda c: min(self.getBwInfo(c)))
-            self.cur_group = temp_group[-client_len:]
-            self.rng.shuffle(self.cur_group)
+            self.sticky_group = temp_group[-client_len:]
+            self.rng.shuffle(self.sticky_group)
             # We treat the clients sampled from the first round as sticky clients
-            pickled_changes = self.cur_group[:min(numOfClients, client_len)]
+            selected_new_clients = self.sticky_group[:min(numOfClients, client_len)]
         else:
-            
             # randomly delete some clients
-            self.rng.shuffle(self.cur_group)
+            self.rng.shuffle(self.sticky_group)
             # Find the clients that are available in the sticky group
-            online_sticky_group = [i for i in self.cur_group if i in clients_online_set]
+            online_sticky_group = [i for i in self.sticky_group if i in clients_online_set]
             logging.info(f"num {numOfClients} change {change_num}")
-            pickled_sticky_clients = online_sticky_group[:(numOfClients - change_num)]
+            selected_sticky_clients = online_sticky_group[:(numOfClients - change_num)]
             # randomly include some clients
             self.rng.shuffle(clients_online)
             client_len = min(change_num, len(clients_online)-1)
-            pickled_changes = []
+            selected_new_clients = []
             for client in clients_online:
-                if client in self.cur_group:
+                if client in self.sticky_group:
                     continue
-                pickled_changes.append(client)
-                if len(pickled_changes) == client_len:
+                selected_new_clients.append(client)
+                if len(selected_new_clients) == client_len:
                     break
             
-        logging.info(f"Selected sticky clients ({len(pickled_sticky_clients)}): {sorted(pickled_sticky_clients)}\nSelected new clients({len(pickled_changes)}) {sorted(pickled_changes)}")
-        return pickled_sticky_clients, pickled_changes
+        logging.info(f"Selected sticky clients ({len(selected_sticky_clients)}): {sorted(selected_sticky_clients)}\nSelected new clients({len(selected_new_clients)}) {sorted(selected_new_clients)}")
+        return selected_sticky_clients, selected_new_clients
 
 
     def getBwInfo(self, clientId):

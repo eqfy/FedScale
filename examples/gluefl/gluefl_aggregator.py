@@ -1,8 +1,8 @@
 import os
 import sys
-from examples.gluefl.gluefl_client_manager import GlueflClientManager
-
 import fedscale.core.channels.job_api_pb2 as job_api_pb2
+
+from examples.gluefl.gluefl_client_manager import GlueflClientManager
 from fedscale.core import commons
 from fedscale.core.aggregation.aggregator import Aggregator
 from fedscale.core.logger.aggragation import *
@@ -14,6 +14,8 @@ class GlueflAggregator(Aggregator):
     """Feed aggregator using tensorflow models"""
     def __init__(self, args):
         super().__init__(args)
+        self.client_manager = self.init_client_manager(args)
+
         self.dataset_total_worker = args.dataset_total_worker # to distinguish between self.args.total_worker which is the total worker in a round
         # FIXME make this be the len of client_profiles (or derived from it)
         self.num_participants = args.num_participants
@@ -32,7 +34,7 @@ class GlueflAggregator(Aggregator):
 
         self.fl_method = args.fl_method
 
-        self.compressed_gradient = None
+        self.compressed_gradient = []
         self.mask_record_list = []
         self.shared_mask = []
 
@@ -157,7 +159,7 @@ class GlueflAggregator(Aggregator):
                     ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                    self.round_evaluator.recordClient(client_to_run, dl_size, ul_size, exe_cost)
+                    self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
                 elif self.fl_method == "GlueFL":
                     l = self.last_update_index[client_to_run]
                     r = self.round - 1
@@ -168,7 +170,7 @@ class GlueflAggregator(Aggregator):
                     
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     dl_bw, ul_bw = self.client_manager.getBwInfo(client_to_run)
-                    self.round_evaluator.recordClient(client_to_run, dl_size, ul_size, exe_cost, dl_bw, ul_bw)
+                    self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, dl_bw, ul_bw)
 
 
                 roundDuration = exe_cost['computation'] + exe_cost['downstream'] + exe_cost['upstream']
@@ -244,23 +246,11 @@ class GlueflAggregator(Aggregator):
         self.model_in_update += 1
         self.aggregate_client_weights(results)
 
-        # logging.info("Good 1")
         # All clients are done
         if self.model_in_update == self.tasks_round:
-            # logging.info("Good 2")
-            if self.fl_method == "APF":
-                # TODO APF
-                pass
-            else:
-                self.apply_and_update_mask()
-
-            if self.fl_method == "APF":
-                # TODO
-                pass
-            # logging.info("Good 3")
+            self.apply_and_update_mask()
             spar_ratio = Sparsification.check_sparsification_ratio([self.compressed_gradient])
             mask_ratio = Sparsification.check_sparsification_ratio([self.shared_mask])
-            # ovlp_ratio = check_sparsification_ratio([self.overlap_gradient])
             logging.info(f"Gradients sparsification: {spar_ratio}")
             logging.info(f"Mask sparsification: {mask_ratio}")
 
@@ -279,25 +269,6 @@ class GlueflAggregator(Aggregator):
 
             self.mask_record_list.append(mask_list)
         self.update_lock.release()
-
-    def check_sparsification_ratio(self, global_g_list):
-        worker_number = len(global_g_list)
-        spar_ratio = 0.
-
-        total_param = 0
-        for g_idx, g_param in enumerate(global_g_list[0]):
-            total_param += len(torch.flatten(global_g_list[0][g_idx]))
-
-        for i in range(worker_number):
-            non_zero_param = 0
-            for g_idx, g_param in enumerate(global_g_list[i]):
-                mask = g_param != 0.
-                # print(mask)
-                non_zero_param += float(torch.sum(mask))
-
-            spar_ratio += (non_zero_param / total_param) / worker_number
-
-        return spar_ratio
 
     def aggregate_client_weights(self, results):
         """May aggregate client updates on the fly
@@ -359,9 +330,8 @@ class GlueflAggregator(Aggregator):
                 self.compressed_gradient[idx] = compressor_tot.decompress(self.compressed_gradient[idx], ctx_tmp)
             else:
                 # shared + local mask
-                max_value = float(self.compressed_gradient[idx].abs().max())
                 update_mask = self.compressed_gradient[idx].clone().detach()
-                update_mask[self.shared_mask[idx] == True] = max_value
+                update_mask[self.shared_mask[idx] == True] = np.inf
                 update_mask, ctx_tmp = compressor_tot.compress(update_mask)
                 update_mask = compressor_tot.decompress(update_mask, ctx_tmp)
                 update_mask = update_mask.to(torch.bool)
@@ -446,23 +416,87 @@ class GlueflAggregator(Aggregator):
         
         return response
 
-    def select_participants(self, select_num_participants, overcommitment=1.0):
-        return sorted(self.client_manager.select_participants(
-            round(select_num_participants*overcommitment),
-            cur_time=self.global_virtual_clock),
-        )
+    def select_participants(self):
+        """
+        Selects next round's participants depending on the sampling strategy
 
+        If sampling_strategy == "STICKY", then use sticky sampling and, if possible, ensure that the number of sticky
+        and change/new/non-sticky clients is the same as specified in the config args.
+        Relevant args include num_participants, sticky_group_size, sticky_group_change_num, overcommitment, overcommit_weight
 
-    def select_participants_sticky(self, select_num_participants, overcommitment=1.0):
-        self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
-                round(select_num_participants*overcommitment),
+        Otherwise, use uniform sampling.
+        """
+        if self.sampling_strategy == "STICKY":
+            numOfClients = round(self.args.num_participants*self.args.overcommitment)
+            numOfClientsOvercommit = numOfClients - self.args.num_participants
+            numOfChangedClients = round(self.args.overcommit_weight * numOfClientsOvercommit) + self.sticky_group_change_num if self.args.overcommit_weight>= 0 else round(self.sticky_group_change_num*self.args.overcommitment)
+
+            # Run core sticky sampling algorithm to find next round's potential sticky and changed (non-sticky) clients
+            self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
+                numOfClients,
                 cur_time=self.global_virtual_clock,
                 K=self.sticky_group_size,
-                change_num=round(self.sticky_group_change_num*overcommitment)
+                change_num=numOfChangedClients
             )
-        self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
-        return self.sampled_sticky_clients, self.sampled_changed_clients
+            self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
 
+            # Choose fastest online changed clients
+            (change_to_run, change_stragglers, change_lost, change_virtual_client_clock, 
+            change_round_duration, change_flatten_client_duration) = self.tictak_client_tasks(
+                self.sampled_changed_clients, 
+                self.args.sticky_group_change_num if self.round > 1 else self.args.num_participants)
+            logging.info(f"Selected change participants to run: {sorted(change_to_run)}\nchange stragglers: {sorted(change_stragglers)}\nchange lost: {sorted(change_lost)}")
+
+            # Randomly choose from online sticky clients
+            sticky_to_run_count = self.args.num_participants - self.args.sticky_group_change_num
+            (sticky_fast, sticky_slow, sticky_lost, sticky_virtual_client_clock, 
+            _, sticky_flatten_client_duration) = self.tictak_client_tasks(
+                self.sampled_sticky_clients, sticky_to_run_count)
+            all_sticky = sticky_fast + sticky_slow
+            all_sticky.sort(key=lambda c: sticky_virtual_client_clock[c]['round'])
+            faster_sticky_count = sum(1 for c in all_sticky if sticky_virtual_client_clock[c]['round'] <= change_round_duration)
+
+            if faster_sticky_count >= sticky_to_run_count:
+                sticky_to_run = random.sample(all_sticky[:faster_sticky_count], sticky_to_run_count)
+            else:
+                extra_sticky_clients = sticky_to_run_count - faster_sticky_count
+                sticky_to_run = all_sticky[:faster_sticky_count + extra_sticky_clients]
+                logging.info(f"Sticky group has only {faster_sticky_count} clients that are faster than change group, fastest sticky clients will be used")
+
+            if (len(self.sampled_sticky_clients) > 0): # There are no sticky clients in round 1
+                slowest_sticky_client_id = max(sticky_to_run, key=lambda k: sticky_virtual_client_clock[k]['round'])
+                sticky_round_duration = sticky_virtual_client_clock[slowest_sticky_client_id]['round']
+            else:
+                sticky_round_duration = 0
+
+            sticky_ignored = [c for c in all_sticky if c not in sticky_to_run]
+
+            logging.info(f"Selected sticky participants to run: {sorted(sticky_to_run)}\nunselected sticky participants: {sorted(sticky_ignored)}\nsticky lost: {sorted(sticky_lost)}")
+
+            # Combine sticky and changed clients together
+            self.clients_to_run = sticky_to_run + change_to_run
+            self.round_stragglers = sticky_ignored + change_stragglers
+            self.round_lost_clients = sticky_lost + change_lost
+            self.virtual_client_clock = {**sticky_virtual_client_clock, **change_virtual_client_clock}
+            self.round_duration = max(sticky_round_duration, change_round_duration)
+            self.flatten_client_duration = numpy.array(sticky_flatten_client_duration + change_flatten_client_duration)
+            self.clients_to_run.sort(key=lambda k: self.virtual_client_clock[k]['round']);
+            self.slowest_client_id = self.clients_to_run[-1]
+
+            # Make sure that there are change_num number of new clients added each epoch 
+            if self.round > 1:
+                self.client_manager.sticky_group = self.client_manager.sticky_group[:-len(change_to_run)] + change_to_run
+        else:
+            self.sampled_participants = sorted(
+                self.client_manager.select_participants(
+                    round(self.args.num_participants*self.args.overcommitment),
+                    cur_time=self.global_virtual_clock))
+            logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
+            (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)
+            self.slowest_client_id = self.clients_to_run[-1]
+            self.flatten_client_duration = numpy.array(self.flatten_client_duration)
+        
+        logging.info(f"Selected participants to run: {sorted(self.clients_to_run)}\nstragglers: {sorted(self.round_stragglers)}\nlost: {sorted(self.round_lost_clients)}")
 
     def round_completion_handler(self):
         """Triggered upon the round completion, it registers the last round execution info,
@@ -498,104 +532,11 @@ class GlueflAggregator(Aggregator):
             self.log_train_result(avg_loss)
 
         if self.round > 1:
-            self.round_evaluator.recordRoundCompletion(self.clients_to_run, self.round_stragglers + self.round_lost_clients, self.slowest_client_id)
-            logging.info(f"Cumulative bandwidth usage:\n \
-            total (excluding overcommit): {self.round_evaluator.total_bandwidth:.2f} kbit\n \
-            total (including overcommit): {self.round_evaluator.total_bandwidth + self.round_evaluator.total_overcommit_bandwidth:.2f} kbit\n \
-            downstream: {self.round_evaluator.total_bandwidth_dl:.2f} kbit\tupstream: {self.round_evaluator.total_bandwidth_ul:.2f} kbit\tprefetch: {self.round_evaluator.total_bandwidth_schedule:.2f} kbit\tovercommit: {self.round_evaluator.total_overcommit_bandwidth:.2f} kbit")
-            logging.info(f"Cumulative round durations:\n \
-            (wall clock time) total:\t{self.round_evaluator.total_duration:.2f} s\n \
-            total_dl:\t{self.round_evaluator.total_duration_dl:.2f} s\t \
-            total_ul:\t{self.round_evaluator.total_duration_ul:.2f} s\t \
-            total_compute:\t{self.round_evaluator.total_duration_compute:.2f} s\n \
-            avg_dl:\t{self.round_evaluator.avg_duration_dl:.2f} s\t \
-            avg_ul:\t{self.round_evaluator.avg_duration_ul:.2f} s\t \
-            avg_compute:\t{self.round_evaluator.avg_duration_compute:.2f} s\n \
-            client_avg_dl:\t{self.round_evaluator.client_avg_duration_dl:.2f} s\t \
-            client_avg_ul:\t{self.round_evaluator.client_avg_duration_ul:.2f} s\t \
-            client_avg_compute:\t{self.round_evaluator.client_avg_duration_compute:.2f} s \
-            ")
-            self.round_evaluator.startNewRound()
+            self.round_evaluator.record_round_completion(self.clients_to_run, self.round_stragglers + self.round_lost_clients, self.slowest_client_id)
+            self.round_evaluator.print_stats()
+            self.round_evaluator.start_new_round()
 
-        # update select participants
-        if self.sampling_strategy == "STICKY":
-            numOfClients = round(self.args.num_participants*self.args.overcommitment)
-            numOfClientsOvercommit = numOfClients - self.args.num_participants
-            numOfChangedClients = round(self.args.overcommit_weight * numOfClientsOvercommit) + self.sticky_group_change_num if self.args.overcommit_weight>= 0 else round(self.sticky_group_change_num*self.args.overcommitment)
-            self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
-                numOfClients,
-                cur_time=self.global_virtual_clock,
-                K=self.sticky_group_size,
-                change_num=numOfChangedClients
-            )
-            self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
-
-            # Choose fastest online changed clients
-            (change_to_run, change_stragglers, change_lost, change_virtual_client_clock, 
-            change_round_duration, change_flatten_client_duration) = self.tictak_client_tasks(
-                self.sampled_changed_clients, 
-                self.args.sticky_group_change_num if self.round > 1 else self.args.num_participants)
-            logging.info(f"Selected change participants to run: {sorted(change_to_run)}\nchange stragglers: {sorted(change_stragglers)}\nchange lost: {sorted(change_lost)}")
-
-            # Randomly choose from online sticky clients
-            sticky_to_run_count = self.args.num_participants - self.args.sticky_group_change_num
-            (sticky_fast, sticky_slow, sticky_lost, sticky_virtual_client_clock, 
-            _, sticky_flatten_client_duration) = self.tictak_client_tasks(
-                self.sampled_sticky_clients, sticky_to_run_count)
-            all_sticky = sticky_fast + sticky_slow
-            all_sticky.sort(key=lambda c: sticky_virtual_client_clock[c]['round'])
-            all_sticky_faster_than_change = [c for c in all_sticky if sticky_virtual_client_clock[c]['round'] <= change_round_duration]
-
-            if len(all_sticky_faster_than_change) >= sticky_to_run_count:
-                sticky_to_run = random.sample(all_sticky_faster_than_change, sticky_to_run_count)
-            else:
-                extra_sticky_clients = sticky_to_run_count - len(all_sticky_faster_than_change)
-                logging.info(f"Sticky needs {extra_sticky_clients} additional clients")
-                sticky_to_run = all_sticky_faster_than_change + all_sticky[len(all_sticky_faster_than_change):len(all_sticky_faster_than_change) + extra_sticky_clients]
-
-            if (len(self.sampled_sticky_clients) > 0): # There are no sticky clients in round 1
-                slowest_sticky_client_id = max(sticky_to_run, key=lambda k: sticky_virtual_client_clock[k]['round'])
-                sticky_round_duration = sticky_virtual_client_clock[slowest_sticky_client_id]['round']
-            else:
-                sticky_round_duration = 0
-
-            sticky_ignored = [c for c in all_sticky if c not in sticky_to_run]
-
-            logging.info(f"Selected sticky participants to run: {sorted(sticky_to_run)}\nunselected sticky participants: {sorted(sticky_ignored)}\nsticky lost: {sorted(sticky_lost)}")
-
-            # Combine sticky and changed clients together
-            self.clients_to_run = sticky_to_run + change_to_run
-            self.round_stragglers = sticky_ignored + change_stragglers
-            self.round_lost_clients = sticky_lost + change_lost
-            self.virtual_client_clock = {**sticky_virtual_client_clock, **change_virtual_client_clock}
-            self.round_duration = max(sticky_round_duration, change_round_duration)
-            self.flatten_client_duration = numpy.array(sticky_flatten_client_duration + change_flatten_client_duration)
-            self.clients_to_run.sort(key=lambda k: self.virtual_client_clock[k]['round']);
-            self.slowest_client_id = self.clients_to_run[-1]
-
-            # Make sure that there are change_num number of new clients added each epoch 
-            # logging.info(f"Old group {self.client_manager.cur_group}")
-            # logging.info(f"change to run {change_to_run}")
-            if self.round > 1:
-                self.client_manager.cur_group = self.client_manager.cur_group[:-len(change_to_run)] + change_to_run
-            # logging.info(f"New group {self.client_manager.cur_group}")
-        else:
-            self.sampled_participants = self.select_participants(
-                select_num_participants=self.args.num_participants, overcommitment=self.args.overcommitment)
-            logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
-            (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)
-            self.slowest_client_id = self.clients_to_run[-1]
-            self.flatten_client_duration = numpy.array(self.flatten_client_duration)
-        
-        logging.info(f"Selected participants to run: {sorted(self.clients_to_run)}\nstragglers: {sorted(self.round_stragglers)}\nlost: {sorted(self.round_lost_clients)}")
-
-        # logging.info("Client to run")
-        # for c in self.clients_to_run:
-        #     logging.info(f"Client id {c} IsSticky: {c in self.sampled_sticky_client_set}\n\t{self.virtual_client_clock[c]}\n\t{self.round_evaluator.cur_used_bandwidths[c]}")
-        # logging.info("Stragglers")
-        # for c in self.round_stragglers:
-        #     logging.info(f"Client id {c} IsSticky: {c in self.sampled_sticky_client_set}\n\t{self.virtual_client_clock[c]}\n\t{self.round_evaluator.cur_used_bandwidths[c]}")
-        # logging.info(f"Slowest client {self.slowest_client_id} {self.virtual_client_clock[self.slowest_client_id]}")
+        self.select_participants()
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
         self.resource_manager.register_tasks(self.clients_to_run)
