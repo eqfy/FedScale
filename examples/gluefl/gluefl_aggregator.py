@@ -1,3 +1,4 @@
+from collections import deque
 import os
 import sys
 import fedscale.core.channels.job_api_pb2 as job_api_pb2
@@ -43,6 +44,13 @@ class GlueflAggregator(Aggregator):
         self.clients_to_run = []
         self.slowest_client_id = -1
         self.round_evaluator = RoundEvaluator()
+
+        # TODO Extract scheduler logic
+        self.max_prefetch_round = args.max_prefetch_round
+        self.prefetch_estimation_start = args.prefetch_estimation_start
+        self.sampled_clients = []
+        self.sampled_sticky_clients = []
+        self.sampled_changed_clients = []
         # logging.info("Good Init")
 
     def init_client_manager(self, args):
@@ -143,6 +151,10 @@ class GlueflAggregator(Aggregator):
             sampledClientsLost = []
             completionTimes = []
             virtual_client_clock = {}
+
+            # prefetch stats
+            prefetched_clients = set()
+
             # 1. remove dummy clients that are not available to the end of training
             for client_to_run in sampled_clients:
                 client_cfg = self.client_conf.get(client_to_run, self.args)
@@ -169,14 +181,112 @@ class GlueflAggregator(Aggregator):
                     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
                     
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                    dl_bw, ul_bw = self.client_manager.getBwInfo(client_to_run)
-                    self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, dl_bw, ul_bw)
+                    self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
+                elif self.fl_method in ["GlueFLPrefetchA", "GlueFLPrefetchB", "GlueFLPrefetchC"]:
+                    l = self.last_update_index[client_to_run]
+                    r = self.round - 1
+
+                    # if r - l == 1:
+                    #     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                    #     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
+                    #     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
+                        
+                    #     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                    #     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
+                    #     logging.info(f"Prefetch saw sticky client, l {l} r {r} downloading {dl_size}")
+                    #     continue
+
+                    prefetch_completed_round = 0
+                    can_fully_prefetch = False
+                    prefetch_size = 0
+                    prefetched_ratio = 0
+
+                    # logging.info(f"Estimate prefetch client_id {client_to_run}, l {l} and round {self.round}")
+                    # logging.info(f"{client_to_run} is STICKY {client_to_run in self.previous_sampled_participants}")
+                    # Calculate backwards to see if client can finish prefetching in max_prefetch_round
+                    for i in range(1, min(self.max_prefetch_round + 1, self.round - 1)):
+                        l, r = self.last_update_index[client_to_run], self.round - 1 - i
+                        # logging.info(f"Estimate prefetch client_id {client_to_run}, l{l} and r{r}, prefetch by {i}")
+                        if l >= r: # This case usually happens when the client participated in training recently
+                            break
+
+                        round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - self.prefetch_estimation_start):self.round - 1 - i]
+                        min_round_duration = min(round_durations)
+
+                        prefetch_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        # An optimization, the shared mask will always be changed so there is no point in trying to transfer the model corresponding to the shared mask
+                        prefetch_size = min(self.model_update_size * (1 - self.shared_mask_ratio), 
+                        self.model_update_size * (prefetch_update_ratio - self.shared_mask_ratio) + self.model_bitmap_size) 
+
+                        temp_pre_round = self.client_manager.get_download_time(client_to_run, prefetch_size) / min_round_duration
+                        logging.info(f"Prefetch used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations}")
+
+                        prefetch_completed_round = self.round - 1 - i
+                        prefetched_ratio = min(sum(round_durations) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
+
+                        if temp_pre_round <= i:
+                            can_fully_prefetch = True
+                            break
+
+                        # if i == min(self.max_prefetch_round, self.round - 1):
+                        #     # last iteration
+                        #     prefetched_ratio = sum(round_durations) / self.client_manager.get_download_time(client_to_run, prefetch_size)
+
+                        
+                    ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
+
+                    if can_fully_prefetch:
+                        l, r  = prefetch_completed_round, self.round - 1
+                        downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
+                        exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                        self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=prefetch_size)
+                        prefetched_clients.add(client_to_run)
+                        logging.info(f"After prefetch, l {l} and r {r}      dl_size {dl_size}     prefetch_dize {prefetch_size}")
+                    elif prefetch_completed_round > 0:
+                        # Partially prefetched 
+                        # For case where the prefetch budget is not sufficient, but at least something has been fetched
+                        # In this case, on start of the client's scheduled round:
+                        # Finish prefetched portion gets an update equivalent to missing one round
+                        # Unfinished portion gets an update equivalent to missing all the rounds since the client's last update
+                        l_prefeteched, l_unprefeteched, r = prefetch_completed_round, self.last_update_index[client_to_run], self.round - 1
+                        prefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_prefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        unprefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_unprefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        dl_size = min(self.model_update_size * (prefetched_downstream_update_ratio * prefetched_ratio + unprefetched_downstream_update_ratio * (1 - prefetched_ratio)) + self.model_bitmap_size, self.model_update_size)
+
+                        exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size,
+                                                        upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                        self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=prefetch_size)
+                        logging.info(f"Unable to fully prefetch, l_pre {l_prefeteched}, l_nopre {l_unprefeteched} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l_unprefeteched <= 1 else 'slow'}")
+
+                    else:
+                        # No prefetch case
+                        l, r = self.last_update_index[client_to_run], self.round - 1
+                        downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
+                        exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size,
+                                                        upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                        self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
+                        logging.info(f"Cannot prefetch, l {l} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}")                    
+
+
+                        # l_prefeteched, l_unprefeteched, r = max(0, prefetch_completed_round - 1), max(0, prefetch_completed_round), self.round - 1
+                        # # l, r = self.last_update_index[client_to_run], self.round - 1
+
+                        # prefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_prefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        # unprefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_unprefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        # dl_size = min(self.model_update_size * (prefetched_downstream_update_ratio * prefetched_ratio + unprefetched_downstream_update_ratio * (1 - prefetched_ratio)) + self.model_bitmap_size, self.model_update_size)
+                        
+                        # exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size,
+                        #                                     upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                        # self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
+                        # logging.info(f"Unable to fully prefetch, l_pre {l_prefeteched}, l_nopre {l_unprefeteched} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l_unprefeteched <= 1 else 'slow'}")
 
 
                 roundDuration = exe_cost['computation'] + exe_cost['downstream'] + exe_cost['upstream']
                 exe_cost['round'] = roundDuration
                 virtual_client_clock[client_to_run] = exe_cost
-                self.last_update_index[client_to_run] = self.round - 1
+                self.last_update_index[client_to_run] = self.round - 1 # Client knows the global state from the previous round
 
                 # if the client is not active by the time of collection, we consider it is lost in this round
                 if self.client_manager.isClientActive(client_to_run, roundDuration + self.global_virtual_clock):
@@ -185,6 +295,7 @@ class GlueflAggregator(Aggregator):
                 else:
                     sampledClientsLost.append(client_to_run)
 
+            # raise Exception()
             num_clients_to_collect = min(
                 num_clients_to_collect, len(completionTimes))
             # 2. get the top-k completions to remove stragglers
@@ -198,8 +309,10 @@ class GlueflAggregator(Aggregator):
             round_duration = completionTimes[top_k_index[-1]]
             completionTimes.sort()
 
-            # return TictakResponse(clients_to_run, dummy_clients, sampledClientsLost, virtual_client_clock, round_duration, completionTimes)
             slowest_client_id = sampledClientsReal[top_k_index[-1]]
+            logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}")
+            # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
+            
             return (clients_to_run, dummy_clients, sampledClientsLost,
                     virtual_client_clock, round_duration,
                     completionTimes[:num_clients_to_collect])
@@ -416,6 +529,36 @@ class GlueflAggregator(Aggregator):
         
         return response
 
+
+    # TODO Unused
+    # def presample_sticky(self, round: int, cur_time: float, completed_clients = []):
+    #     if self.max_prefetch_round <= 0:
+    #         return self.select_participants_sticky(cur_time)
+
+    #     if (round == 1):
+    #         for _ in range(self.max_prefetch_round - 1):
+    #             sticky_client, changed_client = self.select_participants_sticky(cur_time)
+    #             self.sampled_sticky_clients.append(sticky_client)
+    #             self.sampled_changed_clients.append(changed_client)
+    #             self.update_sticky_group(self.rng.sample(changed_client, min(self.change_num, len(changed_client))))
+
+    #     sticky_client, changed_client = self.select_participants_sticky(cur_time)
+    #     self.sampled_sticky_clients.append(sticky_client)
+    #     self.sampled_changed_clients.append(changed_client)
+
+    #     cur_sticky = self.sampled_sticky_clients.popleft()
+    #     cur_change = self.sampled_changed_clients.popleft()
+
+    #     # TODO validate the cur_sticky and cur_change groups
+    #     # Try using more offline clien
+        
+    #     return cur_sticky, cur_change
+
+
+    # # TODO validate oi
+    # def check_online(self):
+    #     pass
+
     def select_participants(self):
         """
         Selects next round's participants depending on the sampling strategy
@@ -427,17 +570,15 @@ class GlueflAggregator(Aggregator):
         Otherwise, use uniform sampling.
         """
         if self.sampling_strategy == "STICKY":
-            numOfClients = round(self.args.num_participants*self.args.overcommitment)
-            numOfClientsOvercommit = numOfClients - self.args.num_participants
-            numOfChangedClients = round(self.args.overcommit_weight * numOfClientsOvercommit) + self.sticky_group_change_num if self.args.overcommit_weight>= 0 else round(self.sticky_group_change_num*self.args.overcommitment)
+            if self.fl_method == "GlueFLPrefetchA":
+                self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.presample_sticky_a(self.round, self.global_virtual_clock)
+            elif self.fl_method == "GlueFLPrefetchB":
+                self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.presample_sticky_b(self.round, self.global_virtual_clock)
+            elif self.fl_method == "GlueFLPrefetchC":
+                self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.presample_sticky_c(self.round, self.global_virtual_clock)
+            else:
+                self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(cur_time=self.global_virtual_clock)
 
-            # Run core sticky sampling algorithm to find next round's potential sticky and changed (non-sticky) clients
-            self.sampled_sticky_clients, self.sampled_changed_clients = self.client_manager.select_participants_sticky(
-                numOfClients,
-                cur_time=self.global_virtual_clock,
-                K=self.sticky_group_size,
-                change_num=numOfChangedClients
-            )
             self.sampled_sticky_client_set = set(self.sampled_sticky_clients)
 
             # Choose fastest online changed clients
@@ -484,14 +625,16 @@ class GlueflAggregator(Aggregator):
             self.slowest_client_id = self.clients_to_run[-1]
 
             # Make sure that there are change_num number of new clients added each epoch 
-            if self.round > 1:
-                self.client_manager.sticky_group = self.client_manager.sticky_group[:-len(change_to_run)] + change_to_run
+            if self.round > 1 and self.fl_method != "GlueFLPrefetchB" and self.fl_method != "GlueFLPrefetchC":
+                self.client_manager.update_sticky_group(change_to_run)
+
         else:
             self.sampled_participants = sorted(
                 self.client_manager.select_participants(
                     round(self.args.num_participants*self.args.overcommitment),
                     cur_time=self.global_virtual_clock))
             logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
+            
             (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)
             self.slowest_client_id = self.clients_to_run[-1]
             self.flatten_client_duration = numpy.array(self.flatten_client_duration)
@@ -536,6 +679,7 @@ class GlueflAggregator(Aggregator):
             self.round_evaluator.print_stats()
             self.round_evaluator.start_new_round()
 
+        # Select next round's participants
         self.select_participants()
 
         # Issue requests to the resource manager; Tasks ordered by the completion time
