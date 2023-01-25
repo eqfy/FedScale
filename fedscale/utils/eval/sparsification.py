@@ -27,11 +27,12 @@ class Sparsification(object):
 
     @staticmethod
     def check_model_update_overhead(l, r, global_model, mask_record_list, device, use_accurate_cache=False):
-        # logging.info(f"{mask_record_list}")
+        # logging.info(f"check_model_update_overhead {l} {r} {len(mask_record_list)}")
         if r - l < 0:
             raise RuntimeError(f"check_model_update_overhead() saw r{r} which is less than l{l}")
 
-        if l == 0:
+        if l < 0:
+            # Client does not yet have the global model
             return 1;
 
         if r - l == 0:

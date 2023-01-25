@@ -116,7 +116,7 @@ class GlueflAggregator(Aggregator):
         self.model_bitmap_size = self.model_update_size / 32
         self.client_profiles = self.load_client_profile(
             file_path=self.args.device_conf_file)
-        self.last_update_index = [0 for _ in range(self.dataset_total_worker * 2)] # FIXME
+        self.last_update_index = [-1 for _ in range(self.dataset_total_worker * 2)] # FIXME
         self.event_monitor()
 
     def get_shared_mask(self):
@@ -168,46 +168,35 @@ class GlueflAggregator(Aggregator):
                     r = self.round - 1
                     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
                     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
-                    ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
+                    ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
                 elif self.fl_method == "GlueFL":
                     l = self.last_update_index[client_to_run]
                     r = self.round - 1
-
                     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
                     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
                     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
                     
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
-                elif self.fl_method in ["GlueFLPrefetchA", "GlueFLPrefetchB", "GlueFLPrefetchC"]:
-                    l = self.last_update_index[client_to_run]
-                    r = self.round - 1
-
-                    # if r - l == 1:
-                    #     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
-                    #     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
-                    #     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
-                        
-                    #     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                    #     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
-                    #     logging.info(f"Prefetch saw sticky client, l {l} r {r} downloading {dl_size}")
-                    #     continue
-
-                    prefetch_completed_round = 0
+                    # This is an estimate by the server
                     can_fully_prefetch = False
+                    prefetch_completed_round = 0
+                    # These are the actual result of the prefetch
+                    # 0 if participated recently, 1 if can fully prefetch, else (0, 1) if can partially prefetch.
                     prefetch_size = 0
-                    prefetched_ratio = 0
+                    prefetched_ratio = 0 
 
-                    # logging.info(f"Estimate prefetch client_id {client_to_run}, l {l} and round {self.round}")
+                    logging.info(f"Estimate prefetch client_id {client_to_run}, l {self.last_update_index[client_to_run]}, r {self.round - 1} and round {self.round}")
                     # logging.info(f"{client_to_run} is STICKY {client_to_run in self.previous_sampled_participants}")
                     # Calculate backwards to see if client can finish prefetching in max_prefetch_round
                     for i in range(1, min(self.max_prefetch_round + 1, self.round - 1)):
                         l, r = self.last_update_index[client_to_run], self.round - 1 - i
                         # logging.info(f"Estimate prefetch client_id {client_to_run}, l{l} and r{r}, prefetch by {i}")
                         if l >= r: # This case usually happens when the client participated in training recently
+                            logging.info(f"Unable to prefetch because client {client_to_run} participated recently")
                             break
 
                         round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - self.prefetch_estimation_start):self.round - 1 - i]
@@ -227,11 +216,6 @@ class GlueflAggregator(Aggregator):
                         if temp_pre_round <= i:
                             can_fully_prefetch = True
                             break
-
-                        # if i == min(self.max_prefetch_round, self.round - 1):
-                        #     # last iteration
-                        #     prefetched_ratio = sum(round_durations) / self.client_manager.get_download_time(client_to_run, prefetch_size)
-
                         
                     ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
 
@@ -256,7 +240,7 @@ class GlueflAggregator(Aggregator):
 
                         exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size,
                                                         upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                        self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=prefetch_size)
+                        self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=prefetch_size * prefetched_ratio)
                         logging.info(f"Unable to fully prefetch, l_pre {l_prefeteched}, l_nopre {l_unprefeteched} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l_unprefeteched <= 1 else 'slow'}")
 
                     else:
@@ -268,20 +252,6 @@ class GlueflAggregator(Aggregator):
                                                         upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                         self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
                         logging.info(f"Cannot prefetch, l {l} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}")                    
-
-
-                        # l_prefeteched, l_unprefeteched, r = max(0, prefetch_completed_round - 1), max(0, prefetch_completed_round), self.round - 1
-                        # # l, r = self.last_update_index[client_to_run], self.round - 1
-
-                        # prefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_prefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
-                        # unprefetched_downstream_update_ratio = Sparsification.check_model_update_overhead(l_unprefeteched, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
-                        # dl_size = min(self.model_update_size * (prefetched_downstream_update_ratio * prefetched_ratio + unprefetched_downstream_update_ratio * (1 - prefetched_ratio)) + self.model_bitmap_size, self.model_update_size)
-                        
-                        # exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size,
-                        #                                     upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
-                        # self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
-                        # logging.info(f"Unable to fully prefetch, l_pre {l_prefeteched}, l_nopre {l_unprefeteched} and r {r}   dl_size {dl_size}  prefetch_ratio {prefetched_ratio}  prefetch_size {prefetch_size} reason {'sticky or initial' if 0 <= r - l_unprefeteched <= 1 else 'slow'}")
-
 
                 roundDuration = exe_cost['computation'] + exe_cost['downstream'] + exe_cost['upstream']
                 exe_cost['round'] = roundDuration
