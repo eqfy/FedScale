@@ -181,6 +181,7 @@ class GlueflAggregator(Aggregator):
                     
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
+                elif self.fl_method in ["GlueFLPrefetchA", "GlueFLPrefetchB", "GlueFLPrefetchC", "STCPrefetch"]:
                     # This is an estimate by the server
                     can_fully_prefetch = False
                     prefetch_completed_round = 0
@@ -599,10 +600,13 @@ class GlueflAggregator(Aggregator):
                 self.client_manager.update_sticky_group(change_to_run)
 
         else:
-            self.sampled_participants = sorted(
-                self.client_manager.select_participants(
-                    round(self.args.num_participants*self.args.overcommitment),
-                    cur_time=self.global_virtual_clock))
+            if self.fl_method == "STCPrefetch":
+                self.sampled_participants = self.client_manager.presample(self.round, self.global_virtual_clock)
+            else:
+                self.sampled_participants = sorted(
+                    self.client_manager.select_participants(
+                        round(self.args.num_participants*self.args.overcommitment),
+                        cur_time=self.global_virtual_clock))
             logging.info(f"Sampled clients: {sorted(self.sampled_participants)}")
             
             (self.clients_to_run, self.round_stragglers, self.round_lost_clients, self.virtual_client_clock, self.round_duration, self.flatten_client_duration) = self.tictak_client_tasks(self.sampled_participants, self.args.num_participants)

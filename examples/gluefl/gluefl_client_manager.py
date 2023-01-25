@@ -203,7 +203,15 @@ class GlueflClientManager(clientManager):
         
         return cur_sticky, cur_change
 
+    def presample(self, round: int, cur_time: float):
+        if self.max_prefetch_round <= 0:
+            return super().select_participants(self.sample_num, cur_time=cur_time)
 
-    # # TODO validate oi
-    # def check_online(self):
-    #     pass
+        if (round == 1):
+            for _ in range(self.max_prefetch_round):
+                selected_clients = super().select_participants(self.sample_num, cur_time=cur_time)
+                self.sampled_clients.append(selected_clients)
+                
+        selected_clients = super().select_participants(self.sample_num, cur_time=cur_time)
+        self.sampled_clients.append(selected_clients)
+        return self.sampled_clients.popleft()
