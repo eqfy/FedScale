@@ -204,16 +204,16 @@ class GlueflAggregator(Aggregator):
                         min_round_duration = min(round_durations)
 
                         prefetch_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
+                        
                         # An optimization, the shared mask will always be changed so there is no point in trying to transfer the model corresponding to the shared mask
                         prefetch_size = min(self.model_update_size * (1 - self.shared_mask_ratio), 
-                        self.model_update_size * (prefetch_update_ratio - self.shared_mask_ratio) + self.model_bitmap_size) 
+                        self.model_update_size * prefetch_update_ratio * (1 - self.shared_mask_ratio) + self.model_bitmap_size) 
 
                         temp_pre_round = self.client_manager.get_download_time(client_to_run, prefetch_size) / min_round_duration
                         logging.info(f"Prefetch used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations}")
 
                         prefetch_completed_round = self.round - 1 - i
-                        # TODO Fix me when prefetch round > self.max_prefetch_round
-                        prefetched_ratio = min(sum(round_durations[-min(i, self.max_prefetch_round):]) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
+                        prefetched_ratio = min(sum(round_durations[-i:]) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
 
                         if temp_pre_round <= i:
                             can_fully_prefetch = True

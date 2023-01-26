@@ -62,7 +62,7 @@ job_conf:
     - use_cuda: True
     - cuda_device: cuda:0
     - total_mask_ratio: 0.2
-    - shared_mask_ratio: 0.16
+    - shared_mask_ratio: 0.2
     - augmentation_factor: 0.4
     - download_factor: 0.8
     - upload_factor: 1.2
