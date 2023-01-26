@@ -21,10 +21,12 @@ class RoundEvaluator(object):
         
         self.bandwidths = []
         self.total_bw = 0.
-        self.total_bw_dl = 0.
-        self.total_bw_ul = 0.
-        self.total_bw_prefetch = 0.
-        self.total_bw_oc = 0. # Bandwidth recording just the extra downstream from overcommitment
+        self.bw_dl = 0.
+        self.bw_ul = 0.
+        self.bw_prefetch = 0.
+        self.bw_oc = 0.
+        self.bw_oc_dl = 0.
+        self.bw_oc_prefetch = 0.
 
         self.round = 0
 
@@ -70,9 +72,9 @@ class RoundEvaluator(object):
         for id in clients_to_run:
             bw = self.cur_used_bandwidths[id]
             self.total_bw += bw["upstream"] + bw["downstream"] + bw["prefetch"]
-            self.total_bw_ul += bw["upstream"]
-            self.total_bw_dl += bw["downstream"]
-            self.total_bw_prefetch += bw["prefetch"]
+            self.bw_ul += bw["upstream"]
+            self.bw_dl += bw["downstream"]
+            self.bw_prefetch += bw["prefetch"]
 
             avg_ul_duration += self.cur_durations[id]["upstream"]
             avg_dl_duration += self.cur_durations[id]["downstream"]
@@ -87,15 +89,17 @@ class RoundEvaluator(object):
 
         for id in dummy_clients:
             bw = self.cur_used_bandwidths[id]
-            self.total_bw_oc += bw["downstream"]
+            self.bw_oc += bw["downstream"] + bw["prefetch"] # There was a bug here, previously it was just bw["downstream"] TODO unused in new version
+            self.bw_oc_dl += bw["downstream"]
+            self.bw_oc_prefetch += bw["prefetch"]
         return self.total_bw, self.total_duration
 
     def print_stats(self, version=1):
         if version == 0:
             logging.info(f"Cumulative bandwidth usage:\n \
             total (excluding overcommit): {self.total_bw:.0f} kbit\n \
-            total (including overcommit): {self.total_bw + self.total_bw_oc:.0f} kbit\n \
-            downstream: {self.total_bw_dl:.0f} kbit\tupstream: {self.total_bw_ul:.0f} kbit\tprefetch: {self.total_bw_prefetch:.0f} kbit\tovercommit: {self.total_bw_oc:.0f} kbit")
+            total (including overcommit): {self.total_bw + self.bw_oc:.0f} kbit\n \
+            downstream: {self.bw_dl:.0f} kbit\tupstream: {self.bw_ul:.0f} kbit\tprefetch: {self.bw_prefetch:.0f} kbit\tovercommit: {self.bw_oc:.0f} kbit")
             logging.info(f"Cumulative round durations:\n \
             (wall clock time) total:\t{self.total_duration:.0f} s\n \
             total_dl:\t{self.total_duration_dl:.0f} s\t \
@@ -111,13 +115,15 @@ class RoundEvaluator(object):
         elif version == 1:
             logging.info(f"Summary Stats Round {self.round}")
             logging.info(f"""Bandwidth Stats in kbits
-            bw_all({self.total_bw:.0f}) 
-            bw_all_oc({self.total_bw + self.total_bw_oc:.0f}) 
-            bw_all_dl({self.total_bw_dl + self.total_bw_oc + self.total_bw_prefetch:.0f}) 
-            bw_dl({self.total_bw_dl:.0f}) bw_up({self.total_bw_ul:.0f}) bw_oc({self.total_bw_oc:.0f}) 
-            bw_prefetch({self.total_bw_prefetch:.0f})""")
+            bw_time   ({self.bw_dl + self.bw_ul:.0f}) - time calculation
+            bw_real   ({self.bw_dl + self.bw_ul + self.bw_prefetch:.0f}) - only clients participating
+            bw_all    ({self.bw_dl + self.bw_ul + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit
+            bw_all_dl ({self.bw_dl + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit (downstream only)
+            bw_dl({self.bw_dl:.0f}) bw_up({self.bw_ul:.0f}) bw_prefetch({self.bw_prefetch:.0f})
+            bw_oc_dl({self.bw_oc_dl:.0f}) bw_oc_up(0) bw_oc_prefetch({self.bw_oc_prefetch:.0f})""")
             logging.info(f"""Time Stats in s
-            t_all({self.total_duration:.2f}) t_dl({self.total_duration_dl:.2f}) t_ul({self.total_duration_ul:.2f}) t_compute({self.total_duration_compute:.2f})
+            t_all({self.total_duration:.2f}) 
+            t_dl({self.total_duration_dl:.2f}) t_ul({self.total_duration_ul:.2f}) t_compute({self.total_duration_compute:.2f})
             t_avg_dl({self.avg_duration_dl:.2f}) t_avg_ul({self.avg_duration_ul:.2f}) t_avg_compute({self.avg_duration_compute:.2f})
             t_cur_dl({self.cur_duration_dl:.2f}) t_cur_ul({self.cur_duration_ul:.2f}) t_cur_compute({self.cur_duration_compute:.2f})
             t_cur_avg_dl({self.cur_avg_duration_dl:.2f}) t_cur_avg_ul({self.cur_avg_duration_ul:.2f}) t_cur_avg_compute({self.cur_avg_duration_compute:.2f})
