@@ -176,7 +176,7 @@ class GlueflClient(Client):
                 gradient_original = gradient_tmp.clone().detach()
 
                 # ===== apply compression =====
-                if fl_method == 'STC' or epochNo % regenerate_epoch == 1:
+                if fl_method in ["STC", "STCPrefetch"] or epochNo % regenerate_epoch == 1:
                     # local masking
                     gradient_tmp, ctx_tmp = compressor.compress(
                             gradient_tmp)

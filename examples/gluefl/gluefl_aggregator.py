@@ -168,7 +168,7 @@ class GlueflAggregator(Aggregator):
                     r = self.round - 1
                     downstream_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
                     dl_size = min(self.model_update_size * downstream_update_ratio + self.model_bitmap_size, self.model_update_size)
-                    ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
+                    ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
 
                     exe_cost = self.client_manager.getCompletionTime(client_to_run, batch_size=client_cfg.batch_size, upload_step=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                     self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost)
@@ -212,13 +212,17 @@ class GlueflAggregator(Aggregator):
                         logging.info(f"Prefetch used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations}")
 
                         prefetch_completed_round = self.round - 1 - i
-                        prefetched_ratio = min(sum(round_durations) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
+                        # TODO Fix me when prefetch round > self.max_prefetch_round
+                        prefetched_ratio = min(sum(round_durations[-min(i, self.max_prefetch_round):]) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
 
                         if temp_pre_round <= i:
                             can_fully_prefetch = True
                             break
                         
-                    ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
+                    if self.fl_method == "STCPrefetch":
+                        ul_size = self.total_mask_ratio * self.model_update_size + self.model_bitmap_size
+                    else:
+                        ul_size = self.total_mask_ratio * self.model_update_size + min((self.total_mask_ratio - self.shared_mask_ratio) * self.model_update_size, self.model_bitmap_size)
 
                     if can_fully_prefetch:
                         l, r  = prefetch_completed_round, self.round - 1
@@ -406,7 +410,7 @@ class GlueflAggregator(Aggregator):
                 continue
             
             # --- STC ---
-            if self.fl_method == "STC" or self.round % self.regenerate_epoch == 1:
+            if self.fl_method in ["STC", "STCPrefetch"] or self.round % self.regenerate_epoch == 1:
                 # local mask
                 self.compressed_gradient[idx], ctx_tmp = compressor_tot.compress(
                     self.compressed_gradient[idx])
@@ -499,36 +503,6 @@ class GlueflAggregator(Aggregator):
             logging.info(f"Issue EVENT ({current_event}) to EXECUTOR ({executor_id})")
         
         return response
-
-
-    # TODO Unused
-    # def presample_sticky(self, round: int, cur_time: float, completed_clients = []):
-    #     if self.max_prefetch_round <= 0:
-    #         return self.select_participants_sticky(cur_time)
-
-    #     if (round == 1):
-    #         for _ in range(self.max_prefetch_round - 1):
-    #             sticky_client, changed_client = self.select_participants_sticky(cur_time)
-    #             self.sampled_sticky_clients.append(sticky_client)
-    #             self.sampled_changed_clients.append(changed_client)
-    #             self.update_sticky_group(self.rng.sample(changed_client, min(self.change_num, len(changed_client))))
-
-    #     sticky_client, changed_client = self.select_participants_sticky(cur_time)
-    #     self.sampled_sticky_clients.append(sticky_client)
-    #     self.sampled_changed_clients.append(changed_client)
-
-    #     cur_sticky = self.sampled_sticky_clients.popleft()
-    #     cur_change = self.sampled_changed_clients.popleft()
-
-    #     # TODO validate the cur_sticky and cur_change groups
-    #     # Try using more offline clien
-        
-    #     return cur_sticky, cur_change
-
-
-    # # TODO validate oi
-    # def check_online(self):
-    #     pass
 
     def select_participants(self):
         """
