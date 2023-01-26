@@ -31,7 +31,7 @@ setup_commands:
 # Default parameters are specified in config_parser.py, wherein more description of the parameter can be found
 
 job_conf: 
-    - job_name: prefetchA                 # Generate logs under this folder: log_path/job_name/time_stamp
+    - job_name: prefetchA2R                 # Generate logs under this folder: log_path/job_name/time_stamp
     - log_path: /mnt/fl/benchmark # Path of log files
     - num_participants: 30                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - dataset_total_worker: 2800
