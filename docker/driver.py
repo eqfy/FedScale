@@ -147,6 +147,8 @@ if len(sys.argv) > 1:
         process_cmd(sys.argv[2], False if sys.argv[1] == 'submit' else True)
     elif sys.argv[1] == 'stop':
         terminate(sys.argv[2])
+    elif sys.argv[1] == 'stopall':
+        os.system("python3 docker/shutdown.py all")
     else:
         print_help = True
 else:
