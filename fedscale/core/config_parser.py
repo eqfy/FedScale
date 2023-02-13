@@ -233,6 +233,7 @@ parser.add_argument('--upload_factor', type=float, default=1.0, help="Upload fac
 parser.add_argument('--download_factor', type=float, default=1.0, help="Download factor for finding client download latency")
 parser.add_argument('--compensation_dir', type=str, default="/mnt/fl/benchmark/compensation", help="Directory for storing compensation")
 parser.add_argument('--overcommit_weight', type=float, default=-1, help="How much overcommitment is allocated to sticky vs non-sticky group. If -1, then overcommitment is applied uniformly/")
+parser.add_argument('--per_client_prefetch', type=bool, default=True, help="Determines whether each client individually assess the number of prefetch rounds it will take")
 
 
 args, unknown = parser.parse_known_args()

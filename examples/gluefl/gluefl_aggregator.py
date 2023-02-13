@@ -192,8 +192,10 @@ class GlueflAggregator(Aggregator):
 
                     logging.info(f"Estimate prefetch client_id {client_to_run}, l {self.last_update_index[client_to_run]}, r {self.round - 1} and round {self.round}")
                     # logging.info(f"{client_to_run} is STICKY {client_to_run in self.previous_sampled_participants}")
+
+                    prefetch_start_i = max(min(self.max_prefetch_round + 1, self.round - 1) - 1, 1) if self.args.per_client_prefetch else 1
                     # Calculate backwards to see if client can finish prefetching in max_prefetch_round
-                    for i in range(1, min(self.max_prefetch_round + 1, self.round - 1)):
+                    for i in range(prefetch_start_i, min(self.max_prefetch_round + 1, self.round - 1)):
                         l, r = self.last_update_index[client_to_run], self.round - 1 - i
                         # logging.info(f"Estimate prefetch client_id {client_to_run}, l{l} and r{r}, prefetch by {i}")
                         if l >= r: # This case usually happens when the client participated in training recently
