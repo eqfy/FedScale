@@ -193,7 +193,7 @@ class GlueflAggregator(Aggregator):
                     logging.info(f"Estimate prefetch client_id {client_to_run}, l {self.last_update_index[client_to_run]}, r {self.round - 1} and round {self.round}")
                     # logging.info(f"{client_to_run} is STICKY {client_to_run in self.previous_sampled_participants}")
 
-                    prefetch_start_i = max(min(self.max_prefetch_round + 1, self.round - 1) - 1, 1) if self.args.per_client_prefetch else 1
+                    prefetch_start_i = 1 if self.args.per_client_prefetch else max(min(self.max_prefetch_round + 1, self.round - 1) - 1, 1) 
                     # Calculate backwards to see if client can finish prefetching in max_prefetch_round
                     for i in range(prefetch_start_i, min(self.max_prefetch_round + 1, self.round - 1)):
                         l, r = self.last_update_index[client_to_run], self.round - 1 - i
@@ -202,7 +202,7 @@ class GlueflAggregator(Aggregator):
                             logging.info(f"Unable to prefetch because client {client_to_run} participated recently")
                             break
 
-                        round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - self.prefetch_estimation_start):self.round - 1 - i]
+                        round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - i - self.max_prefetch_round):self.round - 1 - i]
                         min_round_duration = min(round_durations)
 
                         prefetch_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model, self.mask_record_list, self.device, use_accurate_cache=True)
@@ -210,9 +210,10 @@ class GlueflAggregator(Aggregator):
                         # An optimization, the shared mask will always be changed so there is no point in trying to transfer the model corresponding to the shared mask
                         prefetch_size = min(self.model_update_size * (1 - self.shared_mask_ratio), 
                         self.model_update_size * prefetch_update_ratio * (1 - self.shared_mask_ratio) + self.model_bitmap_size) 
+                        # logging.info(f"Prefetch update ratio {prefetch_update_ratio} prefetch size {prefetch_size} model update {self.model_update_size}\nTerm 1 {self.model_update_size * (1 - self.shared_mask_ratio)} Term 2 {self.model_update_size * prefetch_update_ratio * (1 - self.shared_mask_ratio) + self.model_bitmap_size}")
 
                         temp_pre_round = self.client_manager.get_download_time(client_to_run, prefetch_size) / min_round_duration
-                        logging.info(f"Prefetch used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations}")
+                        logging.info(f"Prefetch l {l} r {r} used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations}")
 
                         prefetch_completed_round = self.round - 1 - i
                         prefetched_ratio = min(sum(round_durations[-i:]) / self.client_manager.get_download_time(client_to_run, prefetch_size), 1)
