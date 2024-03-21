@@ -288,6 +288,25 @@ parser.add_argument(
     help="Turn off bi-directional RNNs, introduces lookahead convolution",
 )
 
+# for GlueFL
+parser.add_argument('--dataset_total_worker', type=int, default=2800, help="number of total workers in the current dataset")
+parser.add_argument('--total_mask_ratio', type=float, default=1.0, help="total mask ratio used for compression")
+parser.add_argument('--shared_mask_ratio', type=float, default=1.0, help="shared mask ratio used for compression")
+parser.add_argument('--max_prefetch_round', type=int, default=5, help="prefetch by how many rounds in advance")
+parser.add_argument('--prefetch_estimation_start', type=int, default=5, help="how many rounds in the past with prefetch use for finding min round duration")
+parser.add_argument('--sampling_strategy', type=str, default="UNIFORM", help="sampling strategy")
+parser.add_argument('--sticky_group_size', type=int, default=100, help="sticky group size used for sticky sampling")
+parser.add_argument('--sticky_group_change_num', type=int, default=20, help="number of new clients per round in sticky sampling")
+parser.add_argument('--fl_method', type=str, default="GlueFL", help="FL method")
+parser.add_argument('--regenerate_epoch', type=int, default=10, help="number of epochs before renegerating mask")
+parser.add_argument('--augmentation_factor', type=float, default=3.0, help="Augmentation factor for finding client compute latency")
+parser.add_argument('--upload_factor', type=float, default=1.0, help="Upload factor for finding client upload latency")
+parser.add_argument('--download_factor', type=float, default=1.0, help="Download factor for finding client download latency")
+parser.add_argument('--compensation_dir', type=str, default="/mnt/fl/benchmark/compensation", help="Directory for storing compensation")
+parser.add_argument('--overcommit_weight', type=float, default=-1, help="How much overcommitment is allocated to sticky vs non-sticky group. If -1, then overcommitment is applied uniformly/")
+parser.add_argument('--per_client_prefetch', type=bool, default=True, help="Determines whether each client individually assess the number of prefetch rounds it will take")
+
+
 args, unknown = parser.parse_known_args()
 args.use_cuda = eval(args.use_cuda)
 

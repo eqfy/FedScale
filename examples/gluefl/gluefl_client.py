@@ -5,14 +5,14 @@ import os
 import pickle
 import sys
 
+from fedscale.cloud.execution.torch_client import TorchClient
 import torch.nn as nn
 import numpy as np
 import torch
 from torch.autograd import Variable
 
-from fedscale.core.execution.client import Client
 from fedscale.core.logger.execution import logDir
-from fedscale.core.config_parser import args
+from fedscale.cloud.config_parser import args
 from fedscale.utils.compressor.topk import TopKCompressor
 
 def set_bn_eval(m):
@@ -23,7 +23,7 @@ def set_bn_eval(m):
         m.eval()
 
 """A customized client for GlueFL"""
-class GlueflClient(Client):
+class GlueflClient(TorchClient):
     """Basic client component in Federated Learning"""
 
     def load_compensation(self, temp_path):

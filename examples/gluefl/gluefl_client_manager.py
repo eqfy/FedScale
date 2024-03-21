@@ -5,7 +5,7 @@ from typing import Dict
 import numpy as np
 from scipy.special import softmax
 from examples.gluefl.gluefl_client_metadata import GlueflClientMetadata
-from fedscale.core.client_manager import clientManager
+from fedscale.cloud.client_manager import clientManager
 
 
 class GlueflClientManager(clientManager):
