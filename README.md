@@ -54,13 +54,13 @@ Now that you have FedScale installed, you can start exploring FedScale following
 1. [Explore FedScale datasets](./docs/Femnist_stats.md)
 2. [Deploy your FL experiment](./docs/tutorial.md)
 3. [Implement an FL algorithm](./examples/README.md)
-
+4. [Deploy FL on smartphones](./fedscale/edge/android/README.md)
 
 ## FedScale Datasets
 
 ***We are adding more datasets! Please contribute!***
 
-FedScale consists of 20+ large-scale, heterogeneous FL datasets covering computer vision (CV), natural language processing (NLP), and miscellaneous tasks. 
+FedScale consists of 20+ large-scale, heterogeneous FL datasets and 70+ various [models](./fedscale/utils/models/cv_models/README.md), covering computer vision (CV), natural language processing (NLP), and miscellaneous tasks. 
 Each one is associated with its training, validation, and testing datasets. 
 We acknowledge the contributors of these raw datasets. Please go to the `./benchmark/dataset` directory and follow the dataset [README](./benchmark/dataset/README.md) for more details.
 
@@ -68,7 +68,7 @@ We acknowledge the contributors of these raw datasets. Please go to the `./bench
 FedScale Runtime is an scalable and extensible deployment as well as evaluation platform to simplify and standardize FL experimental setup and model evaluation. 
 It evolved from our prior system, [Oort](https://github.com/SymbioticLab/Oort), which has been shown to scale well and can emulate FL training of thousands of clients in each round.
 
-Please go to `./fedscale/core` directory and follow the [README](./fedscale/core/README.md) to set up FL training scripts.
+Please go to `./fedscale/cloud` directory and follow the [README](./fedscale/cloud/README.md) to set up FL training scripts and the [README](./fedscale/edge/android/README.md) for practical on-device deployment.
 
 
 ## Repo Structure
@@ -76,14 +76,17 @@ Please go to `./fedscale/core` directory and follow the [README](./fedscale/core
 ```
 Repo Root
 |---- fedscale          # FedScale source code
-  |---- core            # Core of FedScale service
+  |---- cloud           # Core of FedScale service
   |---- utils           # Auxiliaries (e.g, model zoo and FL optimizer)
-  |---- deploy          # Deployment backends (e.g., mobile)
+  |---- edge            # Backends for practical deployments (e.g., mobile)
   |---- dataloaders     # Data loaders of benchmarking dataset
 
+|---- docker            # FedScale docker and container deployment (e.g., Kubernetes)
 |---- benchmark         # FedScale datasets and configs
   |---- dataset         # Benchmarking datasets
+  |---- configs         # Example configurations
 
+|---- scripts           # Scripts for installing dependencies
 |---- examples          # Examples of implementing new FL designs
 |---- docs              # FedScale tutorials and APIs
 ```
@@ -113,6 +116,8 @@ and
 
 ## Contributions and Communication
 Please submit [issues](https://github.com/SymbioticLab/FedScale/issues) or [pull requests](https://github.com/SymbioticLab/FedScale/pulls) as you find bugs or improve FedScale.
+
+For each submission, please add unit tests to the corresponding changes and make sure that all unit tests pass by running `pytest fedscale/tests`.
 
 If you have any questions or comments, please join our [Slack](https://join.slack.com/t/fedscale/shared_invite/zt-uzouv5wh-ON8ONCGIzwjXwMYDC2fiKw) channel, or email us ([fedscale@googlegroups.com](mailto:fedscale@googlegroups.com)). 
 

@@ -51,7 +51,7 @@ and then run the [client](../examples/notebook/fedscale_demo_client.ipynb).
 
 ### Evaluate on a GPU Cluster
 
-Once you have followed the **[instructions](../fedscale/core/README.md)** to set up your experiment cluster, you will be able to submit your FL job to the cluster!
+Once you have followed the **[instructions](../fedscale/cloud/README.md)** to set up your experiment cluster, you will be able to submit your FL job to the cluster!
  
 Change `ps_ip` and `worker_ips` to the host name of your nodes in the configuration file by `cat \etc\hosts`.
 For example, set `10.0.0.2:[4,4]` as one of the `worker_ips`
@@ -68,9 +68,14 @@ fedscale driver submit [conf_yml_path]
 
 ## Monitor Your Training Progress
  
-You can find the job logging `job_name` under the path `log_path` specified in the `conf.yml` file. To check the training loss or test accuracy, you can do:
+You can find the job logging `job_name` under the path `log_path` specified in the **[configuration file](../benchmark/configs/femnist/conf.yml)**. To check the training loss or test accuracy, you can do:
 ```
 cat job_name_logging |grep 'Training loss'
 cat job_name_logging |grep 'FL Testing'
 ```
-You can also use [Tensorboard](../fedscale/core/README.md#experiment-dashboard) to better visualize the progress.
+
+You can also use **Tensorboard** or **WandB** to better visualize the progress, please refer to [Dashboard Tutorial](../fedscale/cloud/README.md#dashboard) for more details.
+
+
+## K8S/Docker Deployment
+We also support deploying FL experiments using k8s/docker, please follow instructions in  **[Containerized FedScale Tutorial](../docker/README.md)**.

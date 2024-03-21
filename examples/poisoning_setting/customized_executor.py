@@ -5,10 +5,11 @@ import sys
 
 from customized_client import Customized_Client
 
-from fedscale.core.execution.executor import Executor
-from fedscale.core.logger.execution import args
+import fedscale.cloud.config_parser as parser
+from fedscale.cloud.execution.executor import Executor
 
-"""In this example, we only need to change the Client Component we need to import"""
+
+"""In this example, we only need to change the TorchClient Component we need to import"""
 
 class Customized_Executor(Executor):
     """Each executor takes certain resource to run real training.
@@ -21,6 +22,6 @@ class Customized_Executor(Executor):
         return Customized_Client(conf)
 
 if __name__ == "__main__":
-    executor = Customized_Executor(args)
+    executor = Customized_Executor(parser.args)
     executor.run()
 
