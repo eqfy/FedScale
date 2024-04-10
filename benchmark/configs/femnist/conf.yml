@@ -2,13 +2,13 @@
 
 # ========== Cluster configuration ========== 
 # ip address of the parameter server (need 1 GPU process)
-ps_ip: 10.0.0.1
+ps_ip: localhost
 
 # ip address of each worker:# of available gpus process on each gpu in this node
 # Note that if we collocate ps and worker on same GPU, then we need to decrease this number of available processes on that GPU by 1
 # E.g., master node has 4 available processes, then 1 for the ps, and worker should be set to: worker:3
 worker_ips:
-    - 10.0.0.1:[4]
+    - localhost:[4]
 
 exp_path: $FEDSCALE_HOME/fedscale/cloud
 
@@ -23,6 +23,7 @@ auth:
 
 # cmd to run before we can indeed run FAR (in order)
 setup_commands:
+    - export PYTHONPATH='$FEDSCALE_HOME:$PYTHONPATH'
     - source $HOME/anaconda3/bin/activate fedscale
 
 # ========== Additional job configuration ========== 
@@ -31,7 +32,7 @@ setup_commands:
 job_conf: 
     - job_name: femnist                   # Generate logs under this folder: log_path/job_name/time_stamp
     - log_path: $FEDSCALE_HOME/benchmark # Path of log files
-    - num_participants: 50                  # Number of participants per round, we use K=100 in our paper, large K will be much slower
+    - num_participants: 30                  # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - data_set: femnist                     # Dataset: openImg, google_speech, stackoverflow
     - data_dir: $FEDSCALE_HOME/benchmark/dataset/data/femnist    # Path of the dataset
     - data_map_file: $FEDSCALE_HOME/benchmark/dataset/data/femnist/client_data_mapping/train.csv              # Allocation of data to each client, turn to iid setting if not provided
@@ -47,6 +48,6 @@ job_conf:
     - learning_rate: 0.05
     - batch_size: 20
     - test_bsz: 20
-    - use_cuda: True
+    - use_cuda: False
     - save_checkpoint: False
 

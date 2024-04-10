@@ -24,6 +24,7 @@ auth:
 
 # cmd to run before we can indeed run FAR (in order)
 setup_commands:
+    - export PYTHONPATH='$FEDSCALE_HOME:$PYTHONPATH'
     - source $HOME/anaconda3/bin/activate fedscale
 
 # ========== Additional job configuration ========== 
