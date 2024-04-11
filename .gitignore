@@ -10,7 +10,8 @@
 dist
 logs/
 pymp*
-./benchmark/dataset/data/*
+benchmark/dataset/data/*
+benchmark/compensation/*
 .DS_Store
 *.egg-info
 *logging
