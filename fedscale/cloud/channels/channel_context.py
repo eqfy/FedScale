@@ -24,9 +24,9 @@ class ClientConnections(object):
             options=[
                 ('grpc.max_send_message_length', MAX_MESSAGE_LENGTH),
                 ('grpc.max_receive_message_length', MAX_MESSAGE_LENGTH),
-                ('grpc.keepalive_time_ms', 10000),
-                ("grpc.http2.max_pings_without_data", 5),
-                ("grpc.keepalive_permit_without_calls", 1),
+                # ('grpc.keepalive_time_ms', 10000),
+                # ("grpc.http2.max_pings_without_data", 5),
+                # ("grpc.keepalive_permit_without_calls", 1),
             ]
         )
         self.stub = job_api_pb2_grpc.JobServiceStub(self.channel)
