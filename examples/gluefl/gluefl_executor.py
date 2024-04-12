@@ -6,14 +6,14 @@ import pickle
 import sys
 import time
 
-import fedscale.core.channels.job_api_pb2 as job_api_pb2
+import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 from examples.gluefl.gluefl_client import GlueflClient
-from fedscale.core import fllibs
-from fedscale.core import commons
-from fedscale.core.execution.executor import Executor
-from fedscale.core.execution.rlclient import RLClient
-from fedscale.core.logger import execution
-from fedscale.core.logger.execution import args
+from fedscale.cloud import fllibs
+from fedscale.cloud import commons
+from fedscale.cloud.execution.executor import Executor
+from fedscale.cloud.execution.rl_client import RLClient
+from fedscale.cloud.logger import execution
+from fedscale.cloud.logger.executor_logging import args
 from fedscale.dataloaders.divide_data import select_dataset
 
 """A customized executor for GlueFL"""

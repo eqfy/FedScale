@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 
-from fedscale.core.logger.execution import logDir
+from fedscale.cloud.logger.executor_logging import logDir
 from fedscale.cloud.config_parser import args
 from fedscale.utils.compressor.topk import TopKCompressor
 

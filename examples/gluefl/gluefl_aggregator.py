@@ -1,12 +1,14 @@
 from collections import deque
 import os
 import sys
-import fedscale.core.channels.job_api_pb2 as job_api_pb2
+
+import torch
+import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 
 from examples.gluefl.gluefl_client_manager import GlueflClientManager
-from fedscale.core import commons
-from fedscale.core.aggregation.aggregator import Aggregator
-from fedscale.core.logger.aggragation import *
+from fedscale.cloud import commons
+from fedscale.cloud.aggregation.aggregator import Aggregator
+from fedscale.cloud.logger.aggregator_logging import *
 from fedscale.utils.compressor.topk import TopKCompressor
 from fedscale.utils.eval.round_evaluator import RoundEvaluator
 from fedscale.utils.eval.sparsification import Sparsification
@@ -84,17 +86,30 @@ class GlueflAggregator(Aggregator):
         logging.info(f"Loading {len(info['size'])} client traces ...")
         for _size in info['size']:
             # since the worker rankId starts from 1, we also configure the initial dataId as 1
-            mapped_id = (self.num_of_clients+1) % len(
-                self.client_profiles) if len(self.client_profiles) > 0 else 1
+            mapped_id = (
+                (self.num_of_clients + 1) % len(self.client_profiles)
+                if len(self.client_profiles) > 0
+                else 1
+            )
             systemProfile = self.client_profiles.get(
-                mapped_id, {'computation': 1.0, 'communication': 1.0, 'dl_kbps': 1.0, 'ul_kbps': 1.0})
+                mapped_id, {'computation': 1.0, 'communication': 1.0, 'dl_kbps': 1.0, 'ul_kbps': 1.0}
+            )
 
-            clientId = (
-                self.num_of_clients+1) if self.experiment_mode == commons.SIMULATION_MODE else executorId
+            client_id = (
+                (self.num_of_clients + 1)
+                if self.experiment_mode == commons.SIMULATION_MODE
+                else executorId
+            )
             self.client_manager.register_client(
-                executorId, clientId, size=_size, speed=systemProfile)
-            self.client_manager.registerDuration(clientId, batch_size=self.args.batch_size,
-                                                 upload_step=self.args.local_steps, upload_size=self.model_update_size, download_size=self.model_update_size)
+                executorId, client_id, size=_size, speed=systemProfile
+            )
+            self.client_manager.registerDuration(
+                client_id,
+                batch_size=self.args.batch_size,
+                local_steps=self.args.local_steps,
+                upload_size=self.model_update_size,
+                download_size=self.model_update_size,
+            )
             self.num_of_clients += 1
 
         logging.info("Info of all feasible clients {}".format(
@@ -277,13 +292,13 @@ class GlueflAggregator(Aggregator):
             num_clients_to_collect = min(
                 num_clients_to_collect, len(completionTimes))
             # 2. get the top-k completions to remove stragglers
-            sortedWorkersByCompletion = sorted(
+            workers_sorted_by_completion_time = sorted(
                 range(len(completionTimes)), key=lambda k: completionTimes[k])
-            top_k_index = sortedWorkersByCompletion[:num_clients_to_collect]
+            top_k_index = workers_sorted_by_completion_time[:num_clients_to_collect]
             clients_to_run = [sampledClientsReal[k] for k in top_k_index]
 
             dummy_clients = [sampledClientsReal[k]
-                             for k in sortedWorkersByCompletion[num_clients_to_collect:]]
+                             for k in workers_sorted_by_completion_time[num_clients_to_collect:]]
             round_duration = completionTimes[top_k_index[-1]]
             completionTimes.sort()
 
@@ -291,9 +306,14 @@ class GlueflAggregator(Aggregator):
             logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}")
             # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
             
-            return (clients_to_run, dummy_clients, sampledClientsLost,
-                    virtual_client_clock, round_duration,
-                    completionTimes[:num_clients_to_collect])
+            return (
+                clients_to_run, 
+                dummy_clients, 
+                sampledClientsLost,
+                virtual_client_clock, 
+                round_duration,
+                completionTimes[:num_clients_to_collect],
+            )
         else:
             virtual_client_clock = {
                 client: {'computation': 1, 'communication': 1} for client in sampled_clients}
@@ -311,7 +331,7 @@ class GlueflAggregator(Aggregator):
         
         """
         # Format:
-        #       -results = {'clientId':clientId, 'update_weight': model_param, 'update_gradient': gradient_param, 'moving_loss': round_train_loss,
+        #       -results = {'client_id':client_id, 'update_weight': model_param, 'update_gradient': gradient_param, 'moving_loss': round_train_loss,
         #       'trained_size': count, 'wall_duration': time_cost, 'success': is_success 'utility': utility}
 
         if self.args.gradient_policy in ['q-fedavg']:
@@ -320,19 +340,19 @@ class GlueflAggregator(Aggregator):
         self.stats_util_accumulator.append(results['utility'])
         self.loss_accumulator.append(results['moving_loss'])
 
-        self.client_manager.register_feedback(results['clientId'], results['utility'],
+        self.client_manager.register_feedback(results['client_id'], results['utility'],
                                           auxi=math.sqrt(
                                               results['moving_loss']),
                                           time_stamp=self.round,
-                                          duration=self.virtual_client_clock[results['clientId']]['computation'] +
-                                          self.virtual_client_clock[results['clientId']
+                                          duration=self.virtual_client_clock[results['client_id']]['computation'] +
+                                          self.virtual_client_clock[results['client_id']
                                                                     ]['communication']
                                           )
 
         # ================== Aggregate weights ======================
         self.update_lock.acquire()
         # download_ratio = check_model_update_overhead(0, self.round - 1, self.model, self.mask_record_list)
-        # logging.info(f"Download sparsification: {results['clientId']} {download_ratio}")
+        # logging.info(f"Download sparsification: {results['client_id']} {download_ratio}")
 
         self.model_in_update += 1
         self.aggregate_client_weights(results)
@@ -369,9 +389,9 @@ class GlueflAggregator(Aggregator):
         if self.model_in_update == 1:
             self.compressed_gradient = [torch.zeros_like(param.data).to(device=self.device).to(dtype=torch.float32) for param in self.model.state_dict().values()]
         
-        prob = self.get_gradient_weight(results['clientId'])
+        prob = self.get_gradient_weight(results['client_id'])
         # prob = (1.0 / self.tasks_round)
-        # logging.info(f"weight: {self.get_gradient_weight(results['clientId'])} {results['clientId']}")
+        # logging.info(f"weight: {self.get_gradient_weight(results['client_id'])} {results['client_id']}")
         keys = [] 
         for idx, key in enumerate(self.model.state_dict()):
             keys.append(key)
@@ -381,12 +401,12 @@ class GlueflAggregator(Aggregator):
             else:
                 self.compressed_gradient[idx] += (torch.from_numpy(results['update_gradient'][idx]).to(device=self.device) * (1.0/self.tasks_round))
             
-    def get_gradient_weight(self, clientId):
+    def get_gradient_weight(self, client_id):
         prob = 0
         if self.sampling_strategy == "STICKY":
             if self.round <= 1:
                 prob = (1.0 / float(self.tasks_round))
-            elif clientId in self.sampled_sticky_client_set:
+            elif client_id in self.sampled_sticky_client_set:
                 prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / ((float(self.tasks_round) - float(self.sticky_group_change_num)) / float(self.sticky_group_size)))
             else:
                 prob = (1.0 / float(self.dataset_total_worker)) * (1.0 / (float(self.sticky_group_change_num) / (float(self.dataset_total_worker) - float(self.sticky_group_size))))
@@ -448,13 +468,13 @@ class GlueflAggregator(Aggregator):
             tuple: Training config for new task. (dictionary, PyTorch or TensorFlow module)
 
         """
-        next_clientId = self.resource_manager.get_next_task(executorId)
+        next_client_id = self.resource_manager.get_next_task(executorId)
         train_config = None
         # NOTE: model = None then the executor will load the global model broadcasted in UPDATE_MODEL
         model = None
-        if next_clientId != None:
-            config = self.get_client_conf(next_clientId)
-            train_config = {'client_id': next_clientId, 'task_config': config, "agg_weight": (self.get_gradient_weight(next_clientId) * float(self.dataset_total_worker))}
+        if next_client_id != None:
+            config = self.get_client_conf(next_client_id)
+            train_config = {'client_id': next_client_id, 'task_config': config, "agg_weight": (self.get_gradient_weight(next_client_id) * float(self.dataset_total_worker))}
         return train_config, model
     
     def CLIENT_PING(self, request, context):
@@ -609,11 +629,11 @@ class GlueflAggregator(Aggregator):
         avgUtilLastround = sum(self.stats_util_accumulator) / \
             max(1, len(self.stats_util_accumulator))
         # assign avg reward to explored, but not ran workers
-        for clientId in self.round_stragglers:
-            self.client_manager.register_feedback(clientId, avgUtilLastround,
+        for client_id in self.round_stragglers:
+            self.client_manager.register_feedback(client_id, avgUtilLastround,
                                               time_stamp=self.round,
-                                              duration=self.virtual_client_clock[clientId]['computation'] +
-                                              self.virtual_client_clock[clientId]['communication'],
+                                              duration=self.virtual_client_clock[client_id]['computation'] +
+                                              self.virtual_client_clock[client_id]['communication'],
                                               success=False)
 
         avg_loss = sum(self.loss_accumulator) / \
