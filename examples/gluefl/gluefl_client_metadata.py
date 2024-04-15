@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 
 from fedscale.cloud.internal.client_metadata import ClientMetadata
@@ -21,7 +22,7 @@ class GlueflClientMetadata(ClientMetadata):
         self.upload_factor = upload_factor
         self.download_factor = download_factor
 
-    def getCompletionTime(self, batch_size, upload_step, upload_size, download_size):
+    def get_completion_time(self, batch_size, local_steps, upload_size, download_size):
         """
         Computation latency: compute_speed is the inference latency of models (ms/sample). As reproted in many papers,
                              backward-pass takes around 2x the latency, so we multiple it by 3x;
@@ -30,7 +31,7 @@ class GlueflClientMetadata(ClientMetadata):
         return {
             "computation": self.augmentation_factor
             * batch_size
-            * upload_step
+            * local_steps
             * float(self.compute_speed)
             / 1000.0,
             "communication": (upload_size + download_size) / float(self.bandwidth),
@@ -38,11 +39,10 @@ class GlueflClientMetadata(ClientMetadata):
             "upstream": upload_size / (self.ul_bandwidth * self.upload_factor),
         }
 
-    def getCompletionTime_lognormal(
+    def get_completion_time_lognormal(
         self,
         batch_size,
         local_steps,
-        upload_step,
         upload_size,
         download_size,
         mean_seconds_per_sample=0.005,

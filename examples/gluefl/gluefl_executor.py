@@ -7,13 +7,12 @@ import sys
 import time
 
 import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
+import fedscale.cloud.logger.executor_logging as logger
 from examples.gluefl.gluefl_client import GlueflClient
 from fedscale.cloud import fllibs
 from fedscale.cloud import commons
-from fedscale.cloud.execution.executor import Executor
+from fedscale.cloud.execution.executor import *
 from fedscale.cloud.execution.rl_client import RLClient
-from fedscale.cloud.logger import execution
-from fedscale.cloud.logger.executor_logging import args
 from fedscale.dataloaders.divide_data import select_dataset
 
 """A customized executor for GlueFL"""
@@ -27,7 +26,7 @@ class GlueflExecutor(Executor):
         super(GlueflExecutor, self).__init__(args)
 
         self.temp_mask_path = os.path.join(
-            execution.logDir, "mask_" + str(args.this_rank) + ".pth.tar"
+            logger.logDir, "mask_" + str(args.this_rank) + ".pth.tar"
         )
         self.mask = []
 
@@ -55,7 +54,7 @@ class GlueflExecutor(Executor):
             mask = pickle.load(mask_in)
         return mask
 
-    def training_handler(self, clientId, conf, model=None, agg_weight=None):
+    def training_handler(self, client_id, conf, model, agg_weight=None):
         """Train model given client id
 
         Args:
@@ -67,40 +66,60 @@ class GlueflExecutor(Executor):
 
         """
         # load last global model and mask
-        client_model = self.load_global_model() if model is None else model
-        # for idx, param in enumerate(client_model.state_dict().values()):
-        #     if idx == 0:
-        #         print("check", self.executor_id, clientId, param.data)
-        #         break
+        # client_model = self.load_global_model() if model is None else model
+        
+        self.model_adapter.set_weights(model, is_aggregator=False)
 
         mask_model = self.load_shared_mask()
 
-        conf.clientId, conf.device = clientId, self.device
+        conf.clientId = client_id
         conf.tokenizer = fllibs.tokenizer
-        if self.args.task == "rl":
-            client_data = self.training_sets
-            client = RLClient(conf)
-            train_res = client.train(
-                client_data=client_data, model=client_model, conf=conf
-            )
-        else:
-            client_data = select_dataset(
-                clientId,
+        client_data = (
+            self.training_sets
+            if self.args.task == "rl"
+            else select_dataset(
+                client_id,
                 self.training_sets,
                 batch_size=conf.batch_size,
                 args=self.args,
                 collate_fn=self.collate_fn,
             )
+        )
 
-            client = self.get_client_trainer(conf)
-            train_res = client.train(
-                client_data=client_data,
-                model=client_model,
-                conf=conf,
-                mask_model=mask_model,
-                epochNo=self.round,
-                agg_weight=agg_weight,
-            )
+        client = self.get_client_trainer(self.args)
+        train_res = client.train(
+            client_data=client_data, 
+            model=self.model_adapter.get_model(), 
+            conf=conf, 
+            mask_model=mask_model,
+            epochNo=self.round, 
+            agg_weight=agg_weight
+        )
+
+        # if self.args.task == "rl":
+        #     client_data = self.training_sets
+        #     client = RLClient(conf)
+        #     train_res = client.train(
+        #         client_data=client_data, model=client_model, conf=conf
+        #     )
+        # else:
+        #     client_data = select_dataset(
+        #         client_id,
+        #         self.training_sets,
+        #         batch_size=conf.batch_size,
+        #         args=self.args,
+        #         collate_fn=self.collate_fn,
+        #     )
+
+        #     client = self.get_client_trainer(conf)
+        #     train_res = client.train(
+        #         client_data=client_data,
+        #         model=client_model,
+        #         conf=conf,
+        #         mask_model=mask_model,
+        #         epochNo=self.round,
+        #         agg_weight=agg_weight,
+        #     )
 
         return train_res
 
@@ -120,13 +139,12 @@ class GlueflExecutor(Executor):
             config["agg_weight"],
         )
 
-        model = None
-        if "model" in train_config and train_config["model"] is not None:
-            model = train_config["model"]
-
+        if "model" not in config or not config["model"]:
+            raise "The 'model' object must be a non-null value in the training config."
+        
         client_conf = self.override_conf(train_config)
         train_res = self.training_handler(
-            clientId=client_id, conf=client_conf, model=model, agg_weight=agg_weight
+            client_id=client_id, conf=client_conf, model=config["model"], agg_weight=agg_weight
         )
 
         # Report execution completion meta information
@@ -182,7 +200,11 @@ class GlueflExecutor(Executor):
                     )
 
                 elif current_event == commons.MODEL_TEST:
-                    self.Test(self.deserialize_response(request.meta))
+                    test_config = self.deserialize_response(request.meta)
+                    test_model = self.deserialize_response(request.data)
+                    test_config["model"] = test_model
+                    test_config["client_id"] = int(test_config["client_id"])
+                    self.Test(test_config)
 
                 elif current_event == commons.UPDATE_MODEL:
                     broadcast_config = self.deserialize_response(request.data)
@@ -203,5 +225,5 @@ class GlueflExecutor(Executor):
 
 
 if __name__ == "__main__":
-    executor = GlueflExecutor(args)
+    executor = GlueflExecutor(parser.args)
     executor.run()

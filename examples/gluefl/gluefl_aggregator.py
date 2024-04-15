@@ -1,7 +1,11 @@
 from collections import deque
 import os
 import sys
+import math
+import pickle
+import time
 
+import numpy
 import torch
 import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 
@@ -76,7 +80,7 @@ class GlueflAggregator(Aggregator):
 
     def init_mask(self):
         self.shared_mask = []
-        for idx, param in enumerate(self.model.state_dict().values()):
+        for idx, param in enumerate(self.model_wrapper.get_model().state_dict().values()):
             self.shared_mask.append(
                 torch.zeros_like(param, dtype=torch.bool).to(dtype=torch.bool)
             )
@@ -133,19 +137,21 @@ class GlueflAggregator(Aggregator):
         and communication environment, and monitoring the grpc message.
         """
         self.setup_env()
+        self.client_profiles = self.load_client_profile(
+            file_path=self.args.device_conf_file
+        )
+
         self.init_control_communication()
         self.init_data_communication()
 
         self.init_model()
         self.init_mask()
-        self.save_last_param()
+
         self.model_update_size = (
-            sys.getsizeof(pickle.dumps(self.model)) / 1024.0 * 8.0
+            sys.getsizeof(pickle.dumps(self.model_wrapper)) / 1024.0 * 8.0
         )  # kbits
         self.model_bitmap_size = self.model_update_size / 32
-        self.client_profiles = self.load_client_profile(
-            file_path=self.args.device_conf_file
-        )
+        
         self.last_update_index = [
             -1 for _ in range(self.dataset_total_worker * 2)
         ]  # FIXME
@@ -197,10 +203,10 @@ class GlueflAggregator(Aggregator):
                     "round_duration": 0,
                 }
                 if self.fl_method == "FedAvg":
-                    exe_cost = self.client_manager.getCompletionTime(
+                    exe_cost = self.client_manager.get_completion_time(
                         client_to_run,
                         batch_size=client_cfg.batch_size,
-                        upload_step=client_cfg.local_steps,
+                        local_steps=client_cfg.local_steps,
                         upload_size=self.model_update_size,
                         download_size=self.model_update_size,
                     )
@@ -211,7 +217,7 @@ class GlueflAggregator(Aggregator):
                         Sparsification.check_model_update_overhead(
                             l,
                             r,
-                            self.model,
+                            self.model_wrapper.get_model(),
                             self.mask_record_list,
                             self.device,
                             use_accurate_cache=True,
@@ -227,10 +233,10 @@ class GlueflAggregator(Aggregator):
                         + self.model_bitmap_size
                     )
 
-                    exe_cost = self.client_manager.getCompletionTime(
+                    exe_cost = self.client_manager.get_completion_time(
                         client_to_run,
                         batch_size=client_cfg.batch_size,
-                        upload_step=client_cfg.local_steps,
+                        local_steps=client_cfg.local_steps,
                         upload_size=ul_size,
                         download_size=dl_size,
                     )
@@ -244,7 +250,7 @@ class GlueflAggregator(Aggregator):
                         Sparsification.check_model_update_overhead(
                             l,
                             r,
-                            self.model,
+                            self.model_wrapper.get_model(),
                             self.mask_record_list,
                             self.device,
                             use_accurate_cache=True,
@@ -261,10 +267,10 @@ class GlueflAggregator(Aggregator):
                         self.model_bitmap_size,
                     )
 
-                    exe_cost = self.client_manager.getCompletionTime(
+                    exe_cost = self.client_manager.get_completion_time(
                         client_to_run,
                         batch_size=client_cfg.batch_size,
-                        upload_step=client_cfg.local_steps,
+                        local_steps=client_cfg.local_steps,
                         upload_size=ul_size,
                         download_size=dl_size,
                     )
@@ -327,7 +333,7 @@ class GlueflAggregator(Aggregator):
                             Sparsification.check_model_update_overhead(
                                 l,
                                 r,
-                                self.model,
+                                self.model_wrapper.get_model(),
                                 self.mask_record_list,
                                 self.device,
                                 use_accurate_cache=True,
@@ -385,7 +391,7 @@ class GlueflAggregator(Aggregator):
                             Sparsification.check_model_update_overhead(
                                 l,
                                 r,
-                                self.model,
+                                self.model_wrapper.get_model(),
                                 self.mask_record_list,
                                 self.device,
                                 use_accurate_cache=True,
@@ -396,10 +402,10 @@ class GlueflAggregator(Aggregator):
                             + self.model_bitmap_size,
                             self.model_update_size,
                         )
-                        exe_cost = self.client_manager.getCompletionTime(
+                        exe_cost = self.client_manager.get_completion_time(
                             client_to_run,
                             batch_size=client_cfg.batch_size,
-                            upload_step=client_cfg.local_steps,
+                            local_steps=client_cfg.local_steps,
                             upload_size=ul_size,
                             download_size=dl_size,
                         )
@@ -429,7 +435,7 @@ class GlueflAggregator(Aggregator):
                             Sparsification.check_model_update_overhead(
                                 l_prefeteched,
                                 r,
-                                self.model,
+                                self.model_wrapper.get_model(),
                                 self.mask_record_list,
                                 self.device,
                                 use_accurate_cache=True,
@@ -439,7 +445,7 @@ class GlueflAggregator(Aggregator):
                             Sparsification.check_model_update_overhead(
                                 l_unprefeteched,
                                 r,
-                                self.model,
+                                self.model_wrapper.get_model(),
                                 self.mask_record_list,
                                 self.device,
                                 use_accurate_cache=True,
@@ -456,10 +462,10 @@ class GlueflAggregator(Aggregator):
                             self.model_update_size,
                         )
 
-                        exe_cost = self.client_manager.getCompletionTime(
+                        exe_cost = self.client_manager.get_completion_time(
                             client_to_run,
                             batch_size=client_cfg.batch_size,
-                            upload_step=client_cfg.local_steps,
+                            local_steps=client_cfg.local_steps,
                             upload_size=ul_size,
                             download_size=dl_size,
                         )
@@ -481,7 +487,7 @@ class GlueflAggregator(Aggregator):
                             Sparsification.check_model_update_overhead(
                                 l,
                                 r,
-                                self.model,
+                                self.model_wrapper.get_model(),
                                 self.mask_record_list,
                                 self.device,
                                 use_accurate_cache=True,
@@ -492,10 +498,10 @@ class GlueflAggregator(Aggregator):
                             + self.model_bitmap_size,
                             self.model_update_size,
                         )
-                        exe_cost = self.client_manager.getCompletionTime(
+                        exe_cost = self.client_manager.get_completion_time(
                             client_to_run,
                             batch_size=client_cfg.batch_size,
-                            upload_step=client_cfg.local_steps,
+                            local_steps=client_cfg.local_steps,
                             upload_size=ul_size,
                             download_size=dl_size,
                         )
@@ -602,14 +608,14 @@ class GlueflAggregator(Aggregator):
 
         # ================== Aggregate weights ======================
         self.update_lock.acquire()
-        # download_ratio = check_model_update_overhead(0, self.round - 1, self.model, self.mask_record_list)
+        # download_ratio = check_model_update_overhead(0, self.round - 1, self.model_wrapper.get_model(), self.mask_record_list)
         # logging.info(f"Download sparsification: {results['client_id']} {download_ratio}")
 
         self.model_in_update += 1
-        self.aggregate_client_weights(results)
+        self.update_gradient_aggregation(results)
 
         # All clients are done
-        if self.model_in_update == self.tasks_round:
+        if self._is_last_result_in_round():
             self.apply_and_update_mask()
             spar_ratio = Sparsification.check_sparsification_ratio(
                 [self.compressed_gradient]
@@ -619,18 +625,18 @@ class GlueflAggregator(Aggregator):
             logging.info(f"Mask sparsification: {mask_ratio}")
 
             # ==== update global model =====
-            model_state_dict = self.model.state_dict()
+            model_state_dict = self.model_wrapper.get_model().state_dict()
             for idx, param in enumerate(model_state_dict.values()):
                 # logging.info(f"weight: {idx} {self.compressed_gradient[idx]}")
                 param.data = (
                     param.data.to(device=self.device).to(dtype=torch.float32)
                     - self.compressed_gradient[idx]
                 )
-            self.model.load_state_dict(model_state_dict)
+            self.model_wrapper.get_model().load_state_dict(model_state_dict)
 
             # ===== update mask list =====
             mask_list = []
-            for p_idx, key in enumerate(self.model.state_dict().keys()):
+            for p_idx, key in enumerate(self.model_wrapper.get_model().state_dict().keys()):
                 mask = (self.compressed_gradient[p_idx] != 0).to(
                     device=torch.device("cpu")
                 )
@@ -639,31 +645,33 @@ class GlueflAggregator(Aggregator):
             self.mask_record_list.append(mask_list)
         self.update_lock.release()
 
-    def aggregate_client_weights(self, results):
+    def update_gradient_aggregation(self, results):
         """May aggregate client updates on the fly"""
 
         # ===== initialize compressed gradients =====
-        if self.model_in_update == 1:
+        if self._is_first_result_in_round():
             self.compressed_gradient = [
                 torch.zeros_like(param.data)
                 .to(device=self.device)
                 .to(dtype=torch.float32)
-                for param in self.model.state_dict().values()
+                for param in self.model_wrapper.get_model().state_dict().values()
             ]
 
-        prob = self.get_gradient_weight(results["client_id"])
-        # prob = (1.0 / self.tasks_round)
+        gradient_weight = self.get_gradient_weight(results["client_id"])
+        # gradient_weight = (1.0 / self.tasks_round)
         # logging.info(f"weight: {self.get_gradient_weight(results['client_id'])} {results['client_id']}")
         keys = []
-        for idx, key in enumerate(self.model.state_dict()):
+        for idx, key in enumerate(self.model_wrapper.get_model().state_dict()):
             keys.append(key)
-        for idx, param in enumerate(self.model.state_dict().values()):
+        for idx, param in enumerate(self.model_wrapper.get_model().state_dict().values()):
+            # Batch norm layer is not weighted
             if not (("num_batches_tracked" in keys[idx]) or ("running" in keys[idx])):
+                # TODO Potentially remove this conversion by directly returning a a tensor?
                 self.compressed_gradient[idx] += (
                     torch.from_numpy(results["update_gradient"][idx]).to(
                         device=self.device
                     )
-                    * prob
+                    * gradient_weight
                 )
             else:
                 self.compressed_gradient[idx] += torch.from_numpy(
@@ -709,10 +717,10 @@ class GlueflAggregator(Aggregator):
         compressor_shr = TopKCompressor(compress_ratio=self.shared_mask_ratio)
 
         keys = []
-        for idx, key in enumerate(self.model.state_dict()):
+        for idx, key in enumerate(self.model_wrapper.get_model().state_dict()):
             keys.append(key)
 
-        for idx, param in enumerate(self.model.state_dict().values()):
+        for idx, param in enumerate(self.model_wrapper.get_model().state_dict().values()):
             if ("num_batches_tracked" in keys[idx]) or ("running" in keys[idx]):
                 continue
 
@@ -739,7 +747,7 @@ class GlueflAggregator(Aggregator):
                 self.compressed_gradient[idx][update_mask != True] = 0.0
 
         # --- update shared mask ---
-        for idx, param in enumerate(self.model.state_dict().values()):
+        for idx, param in enumerate(self.model_wrapper.get_model().state_dict().values()):
             if ("num_batches_tracked" in keys[idx]) or ("running" in keys[idx]):
                 continue
 
@@ -760,8 +768,6 @@ class GlueflAggregator(Aggregator):
         """
         next_client_id = self.resource_manager.get_next_task(executorId)
         train_config = None
-        # NOTE: model = None then the executor will load the global model broadcasted in UPDATE_MODEL
-        model = None
         if next_client_id != None:
             config = self.get_client_conf(next_client_id)
             train_config = {
@@ -772,7 +778,7 @@ class GlueflAggregator(Aggregator):
                     * float(self.dataset_total_worker)
                 ),
             }
-        return train_config, model
+        return train_config, self.model_wrapper.get_weights()
 
     def CLIENT_PING(self, request, context):
         """Handle client ping requests
@@ -796,7 +802,7 @@ class GlueflAggregator(Aggregator):
         else:
             current_event = self.individual_client_events[executor_id].popleft()
             if current_event == commons.CLIENT_TRAIN:
-                response_msg, response_data = self.create_client_task(client_id)
+                response_msg, response_data = self.create_client_task(executor_id)
 
                 if response_msg is None:
                     current_event = commons.DUMMY_EVENT
@@ -805,9 +811,10 @@ class GlueflAggregator(Aggregator):
                             commons.CLIENT_TRAIN
                         )
             elif current_event == commons.MODEL_TEST:
-                response_msg = self.get_test_config(client_id)
+                response_msg, response_data = self.get_test_config(client_id)
             elif current_event == commons.UPDATE_MODEL:
-                response_data = self.get_global_model()
+                # Transfer the entire model weights instead of partial model weights in real-life
+                response_data = self.model_wrapper.get_weights()
             elif current_event == commons.UPDATE_MASK:
                 response_data = self.get_shared_mask()
             elif current_event == commons.SHUT_DOWN:
@@ -997,23 +1004,14 @@ class GlueflAggregator(Aggregator):
         self.global_virtual_clock += self.round_duration
         self.round += 1
 
-        if self.round % self.args.decay_round == 0:
-            self.args.learning_rate = max(
-                self.args.learning_rate * self.args.decay_factor,
-                self.args.min_learning_rate,
-            )
-
-        # handle the global update w/ current and last
-        self.round_weight_handler(self.last_gradient_weights)
-
-        avgUtilLastround = sum(self.stats_util_accumulator) / max(
+        last_round_avg_util = sum(self.stats_util_accumulator) / max(
             1, len(self.stats_util_accumulator)
         )
         # assign avg reward to explored, but not ran workers
         for client_id in self.round_stragglers:
             self.client_manager.register_feedback(
                 client_id,
-                avgUtilLastround,
+                last_round_avg_util,
                 time_stamp=self.round,
                 duration=self.virtual_client_clock[client_id]["computation"]
                 + self.virtual_client_clock[client_id]["communication"],
@@ -1052,15 +1050,16 @@ class GlueflAggregator(Aggregator):
         else:
             self.sampled_executors = [str(c_id) for c_id in self.sampled_participants]
 
-        self.save_last_param()
         self.model_in_update = 0
         self.test_result_accumulator = []
         self.stats_util_accumulator = []
         self.client_training_results = []
+        self.loss_accumulator = []
+        self.update_default_task_config()
 
         if self.round >= self.args.rounds:
             self.broadcast_aggregator_events(commons.SHUT_DOWN)
-        elif self.round % self.args.eval_interval == 0:
+        elif self.round % self.args.eval_interval == 0 or self.round == 2:
             self.broadcast_aggregator_events(commons.UPDATE_MODEL)
             self.broadcast_aggregator_events(commons.UPDATE_MASK)
             self.broadcast_aggregator_events(commons.MODEL_TEST)
@@ -1093,8 +1092,8 @@ class GlueflAggregator(Aggregator):
                     break
 
             # Handle events queued on the aggregator
-            elif len(self.sever_events_queue) > 0:
-                client_id, current_event, meta, data = self.sever_events_queue.popleft()
+            elif len(self.server_events_queue) > 0:
+                client_id, current_event, meta, data = self.server_events_queue.popleft()
 
                 if current_event == commons.UPLOAD_MODEL:
                     self.client_completion_handler(self.deserialize_response(data))
@@ -1115,5 +1114,5 @@ class GlueflAggregator(Aggregator):
 
 
 if __name__ == "__main__":
-    aggregator = GlueflAggregator(args)
+    aggregator = GlueflAggregator(parser.args)
     aggregator.run()

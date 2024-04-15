@@ -51,8 +51,8 @@ class GlueflClient(TorchClient):
     def train(
         self, client_data, model: torch.nn.Module, conf, mask_model, epochNo, agg_weight
     ):
-        clientId = conf.clientId
-        device = conf.device
+        client_id = conf.clientId
+        device = self.device
 
         np.random.seed(1)
         total_mask_ratio = args.total_mask_ratio
@@ -67,7 +67,7 @@ class GlueflClient(TorchClient):
         )
 
         logging.info(
-            f"Start to train (CLIENT: {clientId}) (WEIGHT: {agg_weight}) (LR: {conf.learning_rate})..."
+            f"Start to train (CLIENT: {client_id}) (WEIGHT: {agg_weight}) (LR: {conf.learning_rate})..."
         )
         # logging.info(f"{total_mask_ratio} {fl_method} {regenerate_epoch}")
 
@@ -86,7 +86,7 @@ class GlueflClient(TorchClient):
         # ===== load compensation =====
         os.makedirs(compensation_dir, exist_ok=True)
         temp_path = os.path.join(
-            compensation_dir, "compensation_c" + str(clientId) + ".pth.tar"
+            compensation_dir, "compensation_c" + str(client_id) + ".pth.tar"
         )
         compensation_model = []
         # temp_path_2 = os.path.join(logDir, 'gradient_c'+str(clientId)+'.pth.tar')
@@ -246,7 +246,7 @@ class GlueflClient(TorchClient):
 
         # ===== collect results =====
         results = {
-            "clientId": clientId,
+            "client_id": client_id,
             "moving_loss": epoch_train_loss,
             "trained_size": completed_steps * conf.batch_size,
             "success": completed_steps > 0,
@@ -254,9 +254,9 @@ class GlueflClient(TorchClient):
         results["utility"] = math.sqrt(epoch_train_loss) * float(trained_unique_samples)
 
         if error_type is None:
-            logging.info(f"Training of (CLIENT: {clientId}) completes, {results}")
+            logging.info(f"Training of (CLIENT: {client_id}) completes, {results}")
         else:
-            logging.info(f"Training of (CLIENT: {clientId}) failed as {error_type}")
+            logging.info(f"Training of (CLIENT: {client_id}) failed as {error_type}")
 
         # results['update_weight'] = model_param
         results["update_gradient"] = model_gradient

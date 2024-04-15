@@ -5,13 +5,13 @@ from typing import Dict
 import numpy as np
 from scipy.special import softmax
 from examples.gluefl.gluefl_client_metadata import GlueflClientMetadata
-from fedscale.cloud.client_manager import clientManager
+from fedscale.cloud.client_manager import ClientManager
 
 
-class GlueflClientManager(clientManager):
+class GlueflClientManager(ClientManager):
     def __init__(self, mode, args, sample_seed=233):
         super().__init__(mode, args, sample_seed)
-        self.Clients: Dict[str, GlueflClientMetadata] = {}
+        self.client_metadata: Dict[str, GlueflClientMetadata] = {}
         self.sticky_group = []
 
         # Configs
@@ -39,8 +39,8 @@ class GlueflClientManager(clientManager):
 
     def register_client(
         self,
-        hostId: int,
-        clientId: int,
+        host_id: int,
+        client_id: int,
         size: int,
         speed: Dict[str, float],
         duration: float = 1,
@@ -55,18 +55,18 @@ class GlueflClientManager(clientManager):
             duration (float): execution latency.
 
         """
-        uniqueId = self.getUniqueId(hostId, clientId)
+        uniqueId = self.getUniqueId(host_id, client_id)
         user_trace = (
             None
             if self.user_trace is None
             else self.user_trace[
-                self.user_trace_keys[int(clientId) % len(self.user_trace)]
+                self.user_trace_keys[int(client_id) % len(self.user_trace)]
             ]
         )
 
-        self.Clients[uniqueId] = GlueflClientMetadata(
-            hostId,
-            clientId,
+        self.client_metadata[uniqueId] = GlueflClientMetadata(
+            host_id,
+            client_id,
             speed,
             augmentation_factor=self.args.augmentation_factor,
             upload_factor=self.args.upload_factor,
@@ -76,17 +76,16 @@ class GlueflClientManager(clientManager):
 
         # remove clients
         if size >= self.filter_less and size <= self.filter_more:
-            self.feasibleClients.append(clientId)
+            self.feasibleClients.append(client_id)
             self.feasible_samples += size
 
             if self.mode == "oort":
-                feedbacks = {
-                    "reward": min(size, self.args.local_steps * self.args.batch_size),
-                    "duration": duration,
-                }
-                self.ucbSampler.register_client(clientId, feedbacks=feedbacks)
+                feedbacks = {'reward': min(size, self.args.local_steps * self.args.batch_size),
+                             'duration': duration,
+                             }
+                self.ucb_sampler.register_client(client_id, feedbacks=feedbacks)
         else:
-            del self.Clients[uniqueId]
+            del self.client_metadata[uniqueId]
 
     # Sticky sampling
     def select_participants_sticky(self, cur_time):
@@ -146,8 +145,8 @@ class GlueflClientManager(clientManager):
 
     def getBwInfo(self, clientId):
         return (
-            self.Clients[self.getUniqueId(0, clientId)].dl_bandwidth,
-            self.Clients[self.getUniqueId(0, clientId)].ul_bandwidth,
+            self.client_metadata[self.getUniqueId(0, clientId)].dl_bandwidth,
+            self.client_metadata[self.getUniqueId(0, clientId)].ul_bandwidth,
         )
 
     def update_sticky_group(self, new_clients):
@@ -155,7 +154,7 @@ class GlueflClientManager(clientManager):
         self.sticky_group = self.sticky_group[: -len(new_clients)] + new_clients
 
     def get_download_time(self, clientId, size):
-        return size / self.Clients[self.getUniqueId(0, clientId)].dl_bandwidth
+        return size / self.client_metadata[self.getUniqueId(0, clientId)].dl_bandwidth
 
     # TODO potentially move to separate scheduler class
     def presample_sticky_a(self, round: int, cur_time: float, completed_clients=[]):
