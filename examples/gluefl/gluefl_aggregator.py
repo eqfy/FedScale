@@ -25,10 +25,7 @@ class GlueflAggregator(Aggregator):
         super().__init__(args)
         self.client_manager = self.init_client_manager(args)
 
-        self.dataset_total_worker = (
-            args.dataset_total_worker
-        )  # to distinguish between self.args.total_worker which is the total worker in a round
-        # FIXME make this be the len of client_profiles (or derived from it)
+        self.feasible_client_count = len(self.client_manager.feasibleClients)
         self.num_participants = args.num_participants
 
         self.total_mask_ratio = args.total_mask_ratio  # = shared_mask + local_mask
@@ -153,7 +150,7 @@ class GlueflAggregator(Aggregator):
         self.model_bitmap_size = self.model_update_size / 32
         
         self.last_update_index = [
-            -1 for _ in range(self.dataset_total_worker * 2)
+            -1 for _ in range(self.feasible_client_count * 2)
         ]  # FIXME
         self.event_monitor()
 
@@ -684,7 +681,7 @@ class GlueflAggregator(Aggregator):
             if self.round <= 1:
                 prob = 1.0 / float(self.tasks_round)
             elif client_id in self.sampled_sticky_client_set:
-                prob = (1.0 / float(self.dataset_total_worker)) * (
+                prob = (1.0 / float(self.feasible_client_count)) * (
                     1.0
                     / (
                         (float(self.tasks_round) - float(self.sticky_group_change_num))
@@ -692,12 +689,12 @@ class GlueflAggregator(Aggregator):
                     )
                 )
             else:
-                prob = (1.0 / float(self.dataset_total_worker)) * (
+                prob = (1.0 / float(self.feasible_client_count)) * (
                     1.0
                     / (
                         float(self.sticky_group_change_num)
                         / (
-                            float(self.dataset_total_worker)
+                            float(self.feasible_client_count)
                             - float(self.sticky_group_size)
                         )
                     )
@@ -740,7 +737,7 @@ class GlueflAggregator(Aggregator):
             else:
                 # shared + local mask
                 update_mask = self.compressed_gradient[idx].clone().detach()
-                update_mask[self.shared_mask[idx] == True] = np.inf
+                update_mask[self.shared_mask[idx] == True] = numpy.inf
                 update_mask, ctx_tmp = compressor_tot.compress(update_mask)
                 update_mask = compressor_tot.decompress(update_mask, ctx_tmp)
                 update_mask = update_mask.to(torch.bool)
@@ -775,7 +772,7 @@ class GlueflAggregator(Aggregator):
                 "task_config": config,
                 "agg_weight": (
                     self.get_gradient_weight(next_client_id)
-                    * float(self.dataset_total_worker)
+                    * float(self.feasible_client_count)
                 ),
             }
         return train_config, self.model_wrapper.get_weights()
