@@ -289,7 +289,6 @@ parser.add_argument(
 )
 
 # for GlueFL
-parser.add_argument('--dataset_total_worker', type=int, default=2800, help="number of total workers in the current dataset")
 parser.add_argument('--total_mask_ratio', type=float, default=1.0, help="total mask ratio used for compression")
 parser.add_argument('--shared_mask_ratio', type=float, default=1.0, help="shared mask ratio used for compression")
 parser.add_argument('--max_prefetch_round', type=int, default=5, help="prefetch by how many rounds in advance")

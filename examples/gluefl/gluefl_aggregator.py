@@ -25,7 +25,7 @@ class GlueflAggregator(Aggregator):
         super().__init__(args)
         self.client_manager = self.init_client_manager(args)
 
-        self.feasible_client_count = len(self.client_manager.feasibleClients)
+        self.feasible_client_count = 0 # Initialized after executors have finished client registration
         self.num_participants = args.num_participants
 
         self.total_mask_ratio = args.total_mask_ratio  # = shared_mask + local_mask
@@ -129,6 +129,12 @@ class GlueflAggregator(Aggregator):
             "Info of all feasible clients {}".format(self.client_manager.getDataInfo())
         )
 
+        # Post client registration aggregator initialization
+        self.feasible_client_count = len(self.client_manager.feasibleClients)
+        self.last_update_index = [
+            -1 for _ in range(self.feasible_client_count * 2)
+        ]
+
     def run(self):
         """Start running the aggregator server by setting up execution
         and communication environment, and monitoring the grpc message.
@@ -149,9 +155,6 @@ class GlueflAggregator(Aggregator):
         )  # kbits
         self.model_bitmap_size = self.model_update_size / 32
         
-        self.last_update_index = [
-            -1 for _ in range(self.feasible_client_count * 2)
-        ]  # FIXME
         self.event_monitor()
 
     def get_shared_mask(self):
@@ -206,6 +209,9 @@ class GlueflAggregator(Aggregator):
                         local_steps=client_cfg.local_steps,
                         upload_size=self.model_update_size,
                         download_size=self.model_update_size,
+                    )
+                    self.round_evaluator.record_client(
+                        client_to_run, self.model_update_size, self.model_update_size, exe_cost
                     )
                 elif self.fl_method == "STC":
                     l = self.last_update_index[client_to_run]
@@ -288,6 +294,7 @@ class GlueflAggregator(Aggregator):
                     prefetch_size = 0
                     prefetched_ratio = 0
 
+                    logging.info(f"Last update index size {len(self.last_update_index)}")
                     logging.info(
                         f"Estimate prefetch client_id {client_to_run}, l {self.last_update_index[client_to_run]}, r {self.round - 1} and round {self.round}"
                     )
