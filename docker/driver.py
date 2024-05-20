@@ -122,10 +122,10 @@ def process_cmd(yaml_file, local=False):
         print(f"Starting aggregator on {ps_ip}...")
         ps_cmd = f" python {yaml_conf['exp_path']}/{yaml_conf['aggregator_entry']} {conf_script} --this_rank=0 --num_executors={total_gpu_processes} --executor_configs={executor_configs} "
 
-    with open(f"{job_name}_logging", 'wb') as fout:
+    with open(f"{job_name}_logging.log", 'wb') as fout:
         pass
 
-    with open(f"{job_name}_logging", 'a') as fout:
+    with open(f"{job_name}_logging.log", 'a') as fout:
         if local:
             local_process = subprocess.Popen(f'{ps_cmd}', shell=True, stdout=fout, stderr=fout)
             local_pid = local_process.pid
@@ -243,7 +243,7 @@ def process_cmd(yaml_file, local=False):
 
 
     print(f"Submitted job, please check your logs {job_conf['log_path']}/logs/{job_conf['job_name']}/{time_stamp} for status")
-    print(f"if you cannot find logs directory on the path, you need to check ""{job_name}_logging"" log file under FEDSCALE root directory.")
+    print(f"if you cannot find logs directory on the path, you need to check ""{job_name}_logging.log"" log file under FEDSCALE root directory.")
 
 
 def terminate(job_name):
@@ -260,7 +260,7 @@ def terminate(job_name):
     if job_meta['use_container'] == "docker":
         for name, meta_dict in job_meta['container_dict'].items():
             print(f"Shutting down container {name} on {meta_dict['ip']}")
-            with open(f"{job_name}_logging", 'a') as fout:
+            with open(f"{job_name}_logging.log", 'a') as fout:
                 subprocess.Popen(f'ssh {job_meta["user"]}{meta_dict["ip"]} "docker rm --force {name}"',
                                 shell=True, stdout=fout, stderr=fout)
     elif job_meta['use_container'] == "k8s":
@@ -277,7 +277,7 @@ def terminate(job_name):
     else:
         for vm_ip in job_meta['vms']:
             print(f"Shutting down job on {vm_ip}")
-            with open(f"{job_name}_logging", 'a') as fout:
+            with open(f"{job_name}_logging.log", 'a') as fout:
                 subprocess.Popen(f'ssh {job_meta["user"]}{vm_ip} "~/anaconda3/bin/python {current_path}/shutdown.py {job_name}"',
                                 shell=True, stdout=fout, stderr=fout)
 
