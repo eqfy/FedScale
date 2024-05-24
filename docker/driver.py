@@ -13,7 +13,7 @@ from typing import Dict
 import yaml
 import socket
 
-from kubernetes import client, config, utils
+# from kubernetes import client, config, utils
 from yaml_generator import generate_aggr_template, generate_exec_template
 
 
@@ -46,7 +46,7 @@ def process_cmd(yaml_file, local=False):
             use_container = "docker"
             ports = yaml_conf['ports']
         elif yaml_conf['use_container'] == "k8s":
-            submit_to_k8s(yaml_conf)
+            # submit_to_k8s(yaml_conf)
             return
         else:
             print(f'Error: unknown use_container:{yaml_conf["use_container"]}, the supported options are ["docker", "k8s"].')
@@ -278,9 +278,10 @@ def terminate(job_name):
         for vm_ip in job_meta['vms']:
             print(f"Shutting down job on {vm_ip}")
             with open(f"{job_name}_logging.log", 'a') as fout:
-                subprocess.Popen(f'ssh {job_meta["user"]}{vm_ip} "~/anaconda3/bin/python {current_path}/shutdown.py {job_name}"',
+                subprocess.Popen(f'ssh {job_meta["user"]}{vm_ip} "python {current_path}/shutdown.py {job_name}"',
                                 shell=True, stdout=fout, stderr=fout)
 
+"""
 def submit_to_k8s(yaml_conf):
     # TODO: switch to real deployment configs, pod configs are only for testing usage right now
     # TODO: check if k8s is online?
@@ -469,6 +470,7 @@ def submit_to_k8s(yaml_conf):
     with open(current_path, "wb") as fout:
         meta_data = {"user": submit_user, "k8s_dict": k8s_dict, "use_container": "k8s"}
         pickle.dump(meta_data, fout)
+"""
 
 def check_log(job_name):
     current_path = os.path.dirname(os.path.abspath(__file__))

@@ -626,7 +626,7 @@ class Aggregator(job_api_pb2_grpc.JobServiceServicer):
 
         if self.round >= self.args.rounds:
             self.broadcast_aggregator_events(commons.SHUT_DOWN)
-        elif self.round % self.args.eval_interval == 0 or self.round == 1:
+        elif self.round % self.args.eval_interval == 0 or self.round == 5:
             self.broadcast_aggregator_events(commons.UPDATE_MODEL)
             self.broadcast_aggregator_events(commons.MODEL_TEST)
         else:
@@ -737,7 +737,9 @@ class Aggregator(job_api_pb2_grpc.JobServiceServicer):
             with open(os.path.join(logger.logDir, "testing_perf"), "wb") as fout:
                 pickle.dump(self.testing_history, fout)
 
-            self.save_model()
+            # FIXME This does not work. Following is the output from running configs/femnist/conf.yml
+            # ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (122,) + inhomogeneous part.
+            # self.save_model() 
 
             if len(self.loss_accumulator):
                 logging.info("logging test result")

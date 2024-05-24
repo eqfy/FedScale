@@ -32,6 +32,9 @@ class Executor(object):
     def __init__(self, args):
         # initiate the executor log path, and executor ips
         logger.initiate_client_setting()
+        # FIXME Remove once we figure out why cpu is not working
+        # torch.set_num_threads(6)
+        # torch.multiprocessing.set_start_method("spawn")
 
         self.model_adapter = self.get_client_trainer(args).get_model_adapter(
             init_model()

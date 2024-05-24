@@ -1,0 +1,16 @@
+# CPU Interactive session (not currently working)
+salloc --time=2:59:0 --mem=8G --ntasks=1 --cpus-per-task=6 --account=def-mlecuyer
+
+# GPU Interactive session
+salloc --time=1:0:0 --mem=16G --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --account=def-mlecuyer
+
+
+#!/bin/bash
+#SBATCH --nodes 1
+#SBATCH --gres=gpu:1 # request a GPU
+#SBATCH --tasks-per-node=1 
+#SBATCH --cpus-per-task=1 # change this parameter to 2,4,6,... and increase "--num_workers" accordingly to see the effect on performance
+#SBATCH --mem=8G      
+#SBATCH --time=0:05:00
+#SBATCH --output=%N-%j.out
+#SBATCH --account=<your account>
