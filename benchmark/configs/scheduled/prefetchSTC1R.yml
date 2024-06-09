@@ -8,7 +8,7 @@ ps_ip: localhost
 # Note that if we collocate ps and worker on same GPU, then we need to decrease this number of available processes on that GPU by 1
 # E.g., master node has 4 available processes, then 1 for the ps, and worker should be set to: worker:3
 worker_ips: 
-    - localhost:[1]
+    - localhost:[4]
     
 exp_path: $FEDSCALE_HOME/examples/gluefl
 
@@ -24,7 +24,7 @@ auth:
 # cmd to run before we can indeed run FAR (in order)
 setup_commands:
     - export PYTHONPATH='$FEDSCALE_HOME:$PYTHONPATH'
-    - source $HOME/anaconda3/bin/activate fedscale    
+    - source $SLURM_TMPDIR/env/bin/activate    
 
 # ========== Additional job configuration ========== 
 # Default parameters are specified in config_parser.py, wherein more description of the parameter can be found
@@ -34,11 +34,11 @@ job_conf:
     - log_path: $FEDSCALE_HOME/benchmark # Path of log files
     - num_participants: 30                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - data_set: femnist                     # Dataset: openImg, google_speech, stackoverflow
-    - data_dir: $FEDSCALE_HOME/benchmark/dataset/data/femnist    # Path of the dataset
-    - data_map_file: $FEDSCALE_HOME/benchmark/dataset/data/femnist/client_data_mapping/train.csv              # Allocation of data to each client, turn to iid setting if not provided
+    - data_dir: $SLURM_TMPDIR/femnist    # Path of the dataset
+    - data_map_file: $SLURM_TMPDIR/femnist/client_data_mapping/train.csv              # Allocation of data to each client, turn to iid setting if not provided
     - device_conf_file: $FEDSCALE_HOME/benchmark/dataset/data/device_info/client_device_capacity_ul_dl     # Path of the client trace
     - device_avail_file: $FEDSCALE_HOME/benchmark/dataset/data/device_info/client_behave_trace
-    - compensation_dir: $FEDSCALE_HOME/benchmark/compensation
+    - compensation_dir: $SLURM_TMPDIR/compensation
     - model: shufflenet_v2_x2_0                            # Models: e.g., shufflenet_v2_x2_0, mobilenet_v2, resnet34, albert-base-v2
     # - gradient_policy: yogi                 # {"fed-yogi", "fed-prox", "fed-avg"}, "fed-avg" by default
     - eval_interval: 10                     # How many rounds to run a testing on the testing set

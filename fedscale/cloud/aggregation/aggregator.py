@@ -17,6 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import fedscale.cloud.channels.job_api_pb2_grpc as job_api_pb2_grpc
 import fedscale.cloud.logger.aggregator_logging as logger
+# import faulthandler
 from fedscale.cloud.aggregation.optimizers import TorchServerOptimizer
 from fedscale.cloud.channels import job_api_pb2
 from fedscale.cloud.client_manager import ClientManager
@@ -42,6 +43,7 @@ class Aggregator(job_api_pb2_grpc.JobServiceServicer):
         logger.initiate_aggregator_setting()
 
         logging.info(f"Job args {args}")
+        # faulthandler.dump_traceback_later(60)
         self.args = args
         self.experiment_mode = args.experiment_mode
         self.device = args.cuda_device if args.use_cuda else torch.device("cpu")
