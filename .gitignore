@@ -38,6 +38,8 @@ coqa
 .idea
 out/
 build/
+docker/*
+!docker/*.*
 .vscode
 fedscale/cache
 fedscale/tmp*

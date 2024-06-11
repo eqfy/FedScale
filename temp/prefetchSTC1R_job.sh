@@ -15,6 +15,8 @@ source $HOME/FedScale/env_setup.sh ~/projects/def-mlecuyer/qfyan/data/femnist.ta
 
 bash ${FEDSCALE_HOME}/fedscale.sh driver start ./benchmark/configs/scheduled/prefetchSTC1R.yml
 
-sleep 19800
+sleep 30
+
+bash $HOME/FedScale/job_monitor.sh
 
 echo "Script completed."

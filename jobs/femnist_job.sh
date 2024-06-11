@@ -14,7 +14,9 @@ echo "Starting script..."
 source $HOME/FedScale/env_setup.sh ~/projects/def-mlecuyer/qfyan/data/femnist.tar.gz
 
 bash ${FEDSCALE_HOME}/fedscale.sh driver start ./benchmark/configs/femnist/conf.yml
+    
+sleep 30
 
-sleep 19800
+bash $HOME/FedScale/job_monitor.sh
 
 echo "Script completed."

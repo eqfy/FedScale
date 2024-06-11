@@ -12,7 +12,6 @@ import wandb
 
 import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 import fedscale.cloud.logger.executor_logging as logger
-# import faulthandler
 from fedscale.cloud.channels.channel_context import ClientConnections
 from fedscale.cloud.execution.tensorflow_client import TensorflowClient
 from fedscale.cloud.execution.torch_client import TorchClient
@@ -33,7 +32,6 @@ class Executor(object):
     def __init__(self, args):
         # initiate the executor log path, and executor ips
         logger.initiate_client_setting()
-        # faulthandler.dump_traceback_later(60,repeat=True)
         # FIXME Remove once we figure out why cpu is not working
         # torch.set_num_threads(6)
         # torch.multiprocessing.set_start_method("spawn")
