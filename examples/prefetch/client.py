@@ -1,32 +1,27 @@
-from cmath import log
+import copy
 import logging
 import math
 import os
 import pickle
-import sys
+from typing import List
 
+
+from examples.prefetch.constants import *
+from examples.prefetch.utils import is_batch_norm_layer
 from fedscale.cloud.execution.torch_client import TorchClient
-import torch.nn as nn
 import numpy as np
 import torch
 from torch.autograd import Variable
 
-from fedscale.cloud.logger.executor_logging import logDir
 from fedscale.cloud.config_parser import args
+from fedscale.utils.compressor import Compressor
+from fedscale.utils.compressor.lfl import LFLCompressor
+from fedscale.utils.compressor.qsgd import QSGDCompressor
+from fedscale.utils.compressor.qsgd_bucket import QSGDBucketCompressor
 from fedscale.utils.compressor.topk import TopKCompressor
 
 
-def set_bn_eval(m):
-    # print(m.__dict__)
-    classname = m.__class__.__name__
-    # print(classname)
-    if classname.find("BatchNorm2d") != -1 or classname.find("bn") != -1:
-        m.eval()
-
-
 """A customized client for Prefetch FL"""
-
-
 class PrefetchClient(TorchClient):
     """Basic client component in Federated Learning"""
 
@@ -42,6 +37,34 @@ class PrefetchClient(TorchClient):
         with open(temp_path, "wb") as model_out:
             pickle.dump(model, model_out)
 
+    def apply_compressor(self, compressor: Compressor, params: List[torch.Tensor], keys: List[str]):
+        res = []
+        for param, key in zip(params, keys):
+            cur_compressed_update, ctx = None, None
+            # TODO Verify fl batch norm paper to see if quantization affects anything
+            if is_batch_norm_layer(key):
+                cur_compressed_update, ctx = param, (param.shape, "batch_norm")
+            else:
+                cur_compressed_update, ctx = compressor.compress(param)
+
+            res.append((cur_compressed_update, ctx))
+
+        return res
+    
+    def apply_decompressor(self, compressor: Compressor, params, keys: List[str]) -> List[torch.Tensor]:
+        res = []
+        for (param, ctx), key in zip(params, keys):
+            cur_decompressed_update = None
+
+            # TODO Verify fl batch norm paper to see if quantization affects anything
+            if is_batch_norm_layer(key):
+                cur_decompressed_update = param
+            else:
+                cur_decompressed_update = compressor.decompress(param, ctx)
+
+            res.append(cur_decompressed_update)
+        return res
+    
     def train(
         self, client_data, model: torch.nn.Module, conf, mask_model, epochNo, agg_weight
     ):
@@ -85,22 +108,23 @@ class PrefetchClient(TorchClient):
         for idx, key in enumerate(model.state_dict()):
             keys.append(key)
 
-        last_model_copy = [param.data.clone() for param in model.state_dict().values()]
+        last_model_copy = [param.data.clone().detach() for param in model.state_dict().values()]
 
-        optimizer = self.get_optimizer(model, conf)
-        criterion = self.get_criterion(conf)
+        # TODO use FedScale's helper functions instead
+        # optimizer = self.get_optimizer(model, conf)
+        # criterion = self.get_criterion(conf)
+        optimizer = torch.optim.SGD(model.parameters(), lr=conf.learning_rate, momentum=0.9, weight_decay=5e-4)
+        criterion = torch.nn.CrossEntropyLoss().to(device=self.device)
 
         epoch_train_loss = 1e-4
         error_type = None
         completed_steps = 0
 
-        # TODO: One may hope to run fixed number of epochs, instead of iterations
+       # TODO: One may hope to run fixed number of epochs, instead of iterations
         while completed_steps < conf.local_steps:
             for data_pair in client_data:
                 (data, target) = data_pair
-                data, target = Variable(data).to(device=self.device), Variable(target).to(
-                    device=self.device
-                )
+                data, target = Variable(data).to(device=self.device), Variable(target).to(device=self.device)
 
                 if args.task == "speech":
                     data = torch.unsqueeze(data, 1)
@@ -109,10 +133,9 @@ class PrefetchClient(TorchClient):
                 loss = criterion(output, target)
 
                 # only measure the loss of the first epoch
-                epoch_train_loss = (
-                    1.0 - conf.loss_decay
-                ) * epoch_train_loss + conf.loss_decay * loss.item()
+                epoch_train_loss = (1. - conf.loss_decay) * epoch_train_loss + conf.loss_decay * loss.item()
                 # logging.info(f"local {clientId} {completed_steps} {loss.item()}")
+
                 # ========= Define the backward loss ==============
                 optimizer.zero_grad()
                 loss.backward()
@@ -123,33 +146,39 @@ class PrefetchClient(TorchClient):
                 if completed_steps == conf.local_steps:
                     break
 
-        model_gradient = []
-        compressor = TopKCompressor(compress_ratio=total_mask_ratio)
-
         # ===== calculate gradient =====
+        model_gradient = []
         for idx, param in enumerate(model.state_dict().values()):
-            # logging.info(f"last model copy device {last_model_copy[idx].get_device()} param data device {param.data.get_device()}")
-            gradient_tmp = (last_model_copy[idx] - param.data).type(torch.FloatTensor).to(device=self.device)
+            model_gradient.append(
+                (last_model_copy[idx] - param.data).type(torch.FloatTensor).to(device=self.device)
+            )
 
-            if not (('num_batches_tracked' in keys[idx]) or ('running' in keys[idx])):
+        # ===== apply compensation =====
+        if args.use_compensation:
+            for idx, param in enumerate(model_gradient):
+                model_gradient[idx] += (compensation_model[idx] / agg_weight)
+        gradient_original = copy.deepcopy(model_gradient)
 
-                # ===== apply compensation =====
-                if args.use_compensation:
-                    gradient_tmp += (compensation_model[idx] / agg_weight)
-                
-                gradient_original = gradient_tmp.clone().detach()
+        # ===== apply sparsification =====
+        if fl_method == FEDAVG:
+            pass 
+        else:
+            compressor = TopKCompressor(compress_ratio=total_mask_ratio)
+            for idx, gradient_tmp in enumerate(model_gradient):
+                if is_batch_norm_layer(keys[idx]):
+                    continue 
 
-                # ===== apply compression =====
-                if fl_method == 'APF':
+                if fl_method == APF:
                     gradient_tmp[mask_model[idx] != True] = 0.0
+                    model_gradient[idx] = gradient_tmp # FIXME might be redundant
                     
-                elif fl_method == 'STC' or (fl_method == 'GlueFL' and epochNo % regenerate_epoch == 1):
+                elif fl_method == STC or (fl_method == GLUEFL and epochNo % regenerate_epoch == 1):
                     # STC or GlueFL with shared mask regneration
-                    gradient_tmp, ctx_tmp = compressor.compress(
+                    tmp_compressed_gradient, ctx_tmp = compressor.compress(
                             gradient_tmp)
+                    model_gradient[idx] = compressor.decompress(tmp_compressed_gradient, ctx_tmp)
 
-                    gradient_tmp = compressor.decompress(gradient_tmp, ctx_tmp)
-                else:
+                elif fl_method == GLUEFL:
                     # GlueFL shared mask + unique mask
                     max_value = float(gradient_tmp.abs().max())
                     largest_tmp = gradient_tmp.clone().detach()
@@ -158,19 +187,36 @@ class PrefetchClient(TorchClient):
                     largest_tmp = compressor.decompress(largest_tmp, ctx_tmp)
                     largest_tmp = largest_tmp.to(torch.bool)
                     gradient_tmp[largest_tmp != True] = 0.0
+                    model_gradient[idx] = gradient_tmp # FIXME might be redundant
+                
+                else:
+                    raise NotImplementedError(f"Upload sparsification method {fl_method} is not implemented")
 
-            # ===== update compensation ======
-            if args.use_compensation:
-                compensation_model[idx] = (gradient_original.type(torch.FloatTensor) - gradient_tmp.type(torch.FloatTensor)).type(torch.FloatTensor) * agg_weight
-            model_gradient.append(gradient_tmp)
-
+        # ===== apply quantization =====
+        upload_compressor_type = args.upload_compressor_type
+        if upload_compressor_type == NO_QUANTIZATION:
+            pass
+        elif upload_compressor_type == QSGD:
+            compressor = QSGDCompressor(args.quantization_level)
+            compressed_gradient = self.apply_compressor(compressor, model_gradient, keys)
+            model_gradient = self.apply_decompressor(compressor, compressed_gradient, keys)
+        elif upload_compressor_type == QSGD_BUCKET:
+            compressor = QSGDBucketCompressor(args.quantization_level)
+            compressed_gradient = self.apply_compressor(compressor, model_gradient, keys)
+            model_gradient = self.apply_decompressor(compressor, compressed_gradient, keys)
+        elif upload_compressor_type == LFL:
+            compressor = QSGDCompressor(args.quantization_level)
+            compressed_gradient = self.apply_compressor(compressor, model_gradient, keys)
+            model_gradient = self.apply_decompressor(compressor, compressed_gradient, keys)
+        else:
+            raise NotImplementedError(f"Upload compression method {upload_compressor_type} is not implemented")
+        
         # ===== save compensation =====
         if args.use_compensation:
+            for idx, param in enumerate(compensation_model):
+                compensation_model[idx] = (gradient_original[idx] - model_gradient[idx]) * agg_weight
             compensation_model = [e.to(device='cpu') for e in compensation_model]
             self.save_compensation(compensation_model, temp_path)
-
-        # TODO Apply quantization here!
-        model_gradient = [g.to(device="cpu").numpy() for g in model_gradient]
 
         # ===== collect results =====
         results = {
@@ -187,6 +233,7 @@ class PrefetchClient(TorchClient):
             logging.info(f"Training of (CLIENT: {client_id}) failed as {error_type}")
 
         # results['update_weight'] = model_param
+        model_gradient = [g.to(device="cpu").numpy() for g in model_gradient]
         results["update_gradient"] = model_gradient
         results["wall_duration"] = 0
 

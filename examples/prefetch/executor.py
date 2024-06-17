@@ -5,8 +5,10 @@ import os
 import pickle
 import sys
 import time
+from typing import List
 
 from examples.prefetch.client import PrefetchClient
+from examples.prefetch.constants import *
 import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 import fedscale.cloud.logger.executor_logging as logger
 from fedscale.cloud import fllibs
@@ -14,6 +16,9 @@ from fedscale.cloud import commons
 from fedscale.cloud.execution.executor import *
 from fedscale.cloud.execution.rl_client import RLClient
 from fedscale.dataloaders.divide_data import select_dataset
+from fedscale.utils.compressor.lfl import LFLCompressor
+from fedscale.utils.compressor.qsgd import QSGDCompressor
+from fedscale.utils.compressor.qsgd_bucket import QSGDBucketCompressor
 
 """A customized executor for Prefetch FL"""
 
@@ -29,6 +34,10 @@ class PrefetchExecutor(Executor):
             logger.logDir, "mask_" + str(args.this_rank) + ".pth.tar"
         )
         self.mask = []
+
+        # Quantization
+        self.download_compressor_type = args.download_compressor_type
+        self.upload_compressor_type = args.upload_compressor_type
 
     def get_client_trainer(self, conf):
         return PrefetchClient(conf)
@@ -53,6 +62,30 @@ class PrefetchExecutor(Executor):
         with open(self.temp_mask_path, "rb") as mask_in:
             mask = pickle.load(mask_in)
         return mask
+    
+    def set_train_update_virtual(self, model_weights: List[np.ndarray]):
+        self.model_adapter.set_weights(model_weights, is_aggregator=False)
+
+    def set_train_update_real(self, model):
+        # TODO Not used
+        """
+        Model can either be 
+        1. list[np.ndarray]
+        2. dict with layer name as keys, and (compressed tensor, context) tuple as value
+        """
+        if self.download_compressor_type == NO_QUANTIZATION:
+            self.model_adapter.set_weights(model, is_aggregator=False)
+        elif self.download_compressor_type == QSGD:
+            compressor = QSGDCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor(compressor, model, to_device=True)
+        elif self.download_compressor_type == QSGD_BUCKET:
+            compressor = QSGDBucketCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor(compressor, model, to_device=True)
+        elif self.download_compressor_type == LFL:
+            compressor = LFLCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor(compressor, model, to_device=True)
+        else:
+            raise NotImplementedError(f"Download compression method {self.download_compressor_type} is not implemented")
 
     def training_handler(self, client_id, conf, model, agg_weight=None):
         """Train model given client id
@@ -65,11 +98,7 @@ class PrefetchExecutor(Executor):
             dictionary: The train result
 
         """
-        # load last global model and mask
-        # client_model = self.load_global_model() if model is None else model
-        
-        self.model_adapter.set_weights(model, is_aggregator=False)
-
+        self.set_train_update_virtual(model)
         mask_model = self.load_shared_mask()
 
         conf.clientId = client_id

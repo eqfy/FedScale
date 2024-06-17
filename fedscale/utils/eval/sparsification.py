@@ -26,6 +26,19 @@ class Sparsification(object):
         return spar_ratio
 
     @staticmethod
+    def check_tensor_difference(tensor_list_1, tensor_list_2):
+        tot_nonzero = 0
+        tot_param = 0
+        
+        for idx, val in enumerate(tensor_list_1):
+            tmp = (tensor_list_1[idx] - tensor_list_2[idx]) != 0.
+            tot_nonzero += tmp.sum()
+            tot_param += tmp.numel()
+
+        spar_ratio = tot_nonzero / tot_param if tot_param > 0 else -1
+        return spar_ratio
+
+    @staticmethod
     def check_model_update_overhead(l, r, global_model, mask_record_list, device, use_accurate_cache=False):
         # logging.info(f"check_model_update_overhead {l} {r} {len(mask_record_list)}")
         if r - l < 0:

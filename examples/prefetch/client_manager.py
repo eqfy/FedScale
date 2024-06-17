@@ -153,11 +153,19 @@ class PrefetchClientManager(ClientManager):
         self.rng.shuffle(self.sticky_group)
         self.sticky_group = self.sticky_group[: -len(new_clients)] + new_clients
 
-    def get_download_time(self, clientId, size):
+    def get_completion_time(self, client_id, batch_size, local_steps, upload_size, download_size, in_bits=True):
+        if in_bits: # convert to kbits
+            upload_size = upload_size / 1024
+            download_size = download_size / 1024
+        return super().get_completion_time(client_id, batch_size, local_steps, upload_size, download_size)
+
+    def get_download_time(self, clientId, size, in_bits=True):
+        if in_bits:
+            size = size / 1024
         return size / self.client_metadata[self.getUniqueId(0, clientId)].dl_bandwidth
 
     # TODO potentially move to separate scheduler class
-    def presample_sticky_a(self, round: int, cur_time: float, completed_clients=[]):
+    def presample_sticky_simple(self, round: int, cur_time: float, completed_clients=[]):
         if self.max_prefetch_round <= 0:
             return self.select_participants_sticky(cur_time)
 
@@ -183,7 +191,7 @@ class PrefetchClientManager(ClientManager):
 
         return cur_sticky, cur_change
 
-    def presample_sticky_b(self, round: int, cur_time: float, completed_clients=[]):
+    def presample_sticky_uniform(self, round: int, cur_time: float, completed_clients=[]):
         if self.max_prefetch_round <= 0:
             return self.select_participants_sticky(cur_time)
 
@@ -217,7 +225,7 @@ class PrefetchClientManager(ClientManager):
 
         return cur_sticky, cur_change
 
-    def presample_sticky_c(self, round: int, cur_time: float, completed_clients=[]):
+    def presample_sticky_speed_prob(self, round: int, cur_time: float, completed_clients=[]):
         if self.max_prefetch_round <= 0:
             return self.select_participants_sticky(cur_time)
 

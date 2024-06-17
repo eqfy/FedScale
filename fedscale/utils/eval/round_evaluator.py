@@ -94,37 +94,19 @@ class RoundEvaluator(object):
             self.bw_oc_prefetch += bw["prefetch"]
         return self.total_bw, self.total_duration
 
-    def print_stats(self, version=1):
-        if version == 0:
-            logging.info(f"Cumulative bandwidth usage:\n \
-            total (excluding overcommit): {self.total_bw:.0f} kbit\n \
-            total (including overcommit): {self.total_bw + self.bw_oc:.0f} kbit\n \
-            downstream: {self.bw_dl:.0f} kbit\tupstream: {self.bw_ul:.0f} kbit\tprefetch: {self.bw_prefetch:.0f} kbit\tovercommit: {self.bw_oc:.0f} kbit")
-            logging.info(f"Cumulative round durations:\n \
-            (wall clock time) total:\t{self.total_duration:.0f} s\n \
-            total_dl:\t{self.total_duration_dl:.0f} s\t \
-            total_ul:\t{self.total_duration_ul:.0f} s\t \
-            total_compute:\t{self.total_duration_compute:.0f} s\n \
-            avg_dl:\t{self.avg_duration_dl:.0f} s\t \
-            avg_ul:\t{self.avg_duration_ul:.0f} s\t \
-            avg_compute:\t{self.avg_duration_compute:.0f} s\n \
-            client_avg_dl:\t{self.cur_avg_duration_dl:.0f} s\t \
-            client_avg_ul:\t{self.cur_avg_duration_ul:.0f} s\t \
-            client_avg_compute:\t{self.cur_avg_duration_compute:.0f} s \
-            ")
-        elif version == 1:
-            logging.info(f"Summary Stats Round {self.round}")
-            logging.info(f"""Bandwidth Stats in kbits
-            bw_time   ({self.bw_dl + self.bw_ul:.0f}) - time calculation
-            bw_real   ({self.bw_dl + self.bw_ul + self.bw_prefetch:.0f}) - only clients participating
-            bw_all    ({self.bw_dl + self.bw_ul + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit
-            bw_all_dl ({self.bw_dl + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit (downstream only)
-            bw_dl({self.bw_dl:.0f}) bw_up({self.bw_ul:.0f}) bw_prefetch({self.bw_prefetch:.0f})
-            bw_oc_dl({self.bw_oc_dl:.0f}) bw_oc_up(0) bw_oc_prefetch({self.bw_oc_prefetch:.0f})""")
-            logging.info(f"""Time Stats in s
-            t_all({self.total_duration:.2f}) 
-            t_dl({self.total_duration_dl:.2f}) t_ul({self.total_duration_ul:.2f}) t_compute({self.total_duration_compute:.2f})
-            t_avg_dl({self.avg_duration_dl:.2f}) t_avg_ul({self.avg_duration_ul:.2f}) t_avg_compute({self.avg_duration_compute:.2f})
-            t_cur_dl({self.cur_duration_dl:.2f}) t_cur_ul({self.cur_duration_ul:.2f}) t_cur_compute({self.cur_duration_compute:.2f})
-            t_cur_avg_dl({self.cur_avg_duration_dl:.2f}) t_cur_avg_ul({self.cur_avg_duration_ul:.2f}) t_cur_avg_compute({self.cur_avg_duration_compute:.2f})
-            """)
+    def print_stats(self):
+        logging.info(f"Summary Stats Round {self.round}")
+        logging.info(f"""Bandwidth Stats in bits
+        bw_time   ({self.bw_dl + self.bw_ul:.0f}) - time calculation
+        bw_real   ({self.bw_dl + self.bw_ul + self.bw_prefetch:.0f}) - only clients participating
+        bw_all    ({self.bw_dl + self.bw_ul + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit
+        bw_all_dl ({self.bw_dl + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit - downstream only
+        bw_dl     ({self.bw_dl:.0f}) bw_up({self.bw_ul:.0f}) bw_prefetch({self.bw_prefetch:.0f})
+        bw_oc_dl  ({self.bw_oc_dl:.0f}) bw_oc_up(0) bw_oc_prefetch({self.bw_oc_prefetch:.0f})""")
+        logging.info(f"""Time Stats in s
+        t_all({self.total_duration:.2f}) 
+        t_dl({self.total_duration_dl:.2f}) t_ul({self.total_duration_ul:.2f}) t_compute({self.total_duration_compute:.2f})
+        t_avg_dl({self.avg_duration_dl:.2f}) t_avg_ul({self.avg_duration_ul:.2f}) t_avg_compute({self.avg_duration_compute:.2f})
+        t_cur_dl({self.cur_duration_dl:.2f}) t_cur_ul({self.cur_duration_ul:.2f}) t_cur_compute({self.cur_duration_compute:.2f})
+        t_cur_avg_dl({self.cur_avg_duration_dl:.2f}) t_cur_avg_ul({self.cur_avg_duration_ul:.2f}) t_cur_avg_compute({self.cur_avg_duration_compute:.2f})
+        """)

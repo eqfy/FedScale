@@ -6,18 +6,24 @@ import sys
 import math
 import pickle
 import time
+from typing import List
 
 import numpy
 import torch
 from examples.prefetch.client_manager import PrefetchClientManager
-from examples.prefetch.prefetch_model_adaptor import PrefetchModelAdaptor
+from examples.prefetch.constants import *
+from examples.prefetch.utils import is_batch_norm_layer
 from fedscale.cloud.aggregation.optimizers import TorchServerOptimizer
 import fedscale.cloud.channels.job_api_pb2 as job_api_pb2
 from fedscale.cloud import commons
 from fedscale.cloud.aggregation.aggregator import Aggregator
 from fedscale.cloud.internal.torch_model_adapter import TorchModelAdapter
 from fedscale.cloud.logger.aggregator_logging import *
+from fedscale.utils.compressor import Compressor
+from fedscale.utils.compressor.identity import IdentityCompressor
+from fedscale.utils.compressor.lfl import LFLCompressor
 from fedscale.utils.compressor.qsgd import QSGDCompressor
+from fedscale.utils.compressor.qsgd_bucket import QSGDBucketCompressor
 from fedscale.utils.compressor.topk import TopKCompressor
 from fedscale.utils.eval.round_evaluator import RoundEvaluator
 from fedscale.utils.eval.sparsification import Sparsification
@@ -50,6 +56,7 @@ class PrefetchAggregator(Aggregator):
         self.compressed_gradient = []
         self.mask_record_list = []
         self.shared_mask = []
+        self.apf_ratio = 1.0
 
         self.last_update_index = []
         self.round_lost_clients = []
@@ -58,6 +65,7 @@ class PrefetchAggregator(Aggregator):
         self.round_evaluator = RoundEvaluator()
 
         # TODO Extract scheduler logic
+        self.enable_prefetch = args.enable_prefetch
         self.max_prefetch_round = args.max_prefetch_round
         self.prefetch_estimation_start = args.prefetch_estimation_start
         self.sampled_clients = []
@@ -74,10 +82,15 @@ class PrefetchAggregator(Aggregator):
 
         self.download_compressor_type = args.download_compressor_type
         self.upload_compressor_type = args.upload_compressor_type
+        self.prefetch_compressor_type = args.prefetch_compressor_type
+        self.quantization_target = args.quantization_target
 
-        # LFL
-        self.client_model_estimate = None # i.e. \hat{\theta}(t) a statedict
-        # logging.info("Good Init")
+        self.prev_model_weights = None
+        self.client_estimate_weights = None # i.e. \hat{\theta}(t) in LFL
+
+        # TODO currently unused
+        self.download_sparsification_type = args.download_sparsification_type
+        self.upload_sparsification_type = args.upload_sparsification_type
 
     def init_model(self):
         """Initialize the model"""
@@ -189,13 +202,11 @@ class PrefetchAggregator(Aggregator):
         )  # kbits
         self.model_bitmap_size = self.model_update_size / 32
 
-        # self.cum_gradients = [
-        #         torch.zeros_like(param.data)
-        #         .to(device=self.device)
-        #         .to(dtype=torch.float32)
-        #         for param in self.model_wrapper.get_model().state_dict().values()
-        #     ]
-        self.last_round_compressed_gradient = []
+
+        # Quantization
+        self.prev_model_weights = self.model_wrapper.get_weights_torch()
+        self.client_estimate_weights = self.model_wrapper.get_weights_torch()
+        self.quantized_update = None
         
         self.event_monitor()
 
@@ -208,7 +219,7 @@ class PrefetchAggregator(Aggregator):
         """
         return [p.to(device="cpu") for p in self.shared_mask]
 
-    def tictak_client_tasks(self, sampled_clients, num_clients_to_collect):
+    def tictak_client_tasks_old(self, sampled_clients, num_clients_to_collect):
         """Record sampled client execution information in last round. In the SIMULATION_MODE,
         further filter the sampled_client and pick the top num_clients_to_collect clients.
 
@@ -244,18 +255,19 @@ class PrefetchAggregator(Aggregator):
                     "upstream": 0,
                     "round_duration": 0,
                 }
-                if self.fl_method == "FedAvg":
+                if self.fl_method == FEDAVG:
                     exe_cost = self.client_manager.get_completion_time(
                         client_to_run,
                         batch_size=client_cfg.batch_size,
                         local_steps=client_cfg.local_steps,
                         upload_size=self.model_update_size,
                         download_size=self.model_update_size,
+                        in_bits=False
                     )
                     self.round_evaluator.record_client(
                         client_to_run, self.model_update_size, self.model_update_size, exe_cost
                     )
-                elif self.fl_method == "STC":
+                elif self.fl_method == STC:
                     l = self.last_update_index[client_to_run]
                     r = self.round - 1
                     downstream_update_ratio = (
@@ -284,11 +296,12 @@ class PrefetchAggregator(Aggregator):
                         local_steps=client_cfg.local_steps,
                         upload_size=ul_size,
                         download_size=dl_size,
+                        in_bits=False
                     )
                     self.round_evaluator.record_client(
                         client_to_run, dl_size, ul_size, exe_cost
                     )
-                elif self.fl_method == "GlueFL":
+                elif self.fl_method == GLUEFL:
                     l = self.last_update_index[client_to_run]
                     r = self.round - 1
                     downstream_update_ratio = (
@@ -318,16 +331,12 @@ class PrefetchAggregator(Aggregator):
                         local_steps=client_cfg.local_steps,
                         upload_size=ul_size,
                         download_size=dl_size,
+                        in_bits=False
                     )
                     self.round_evaluator.record_client(
                         client_to_run, dl_size, ul_size, exe_cost
                     )
-                elif self.fl_method in [
-                    "GlueFLPrefetchA",
-                    "GlueFLPrefetchB",
-                    "GlueFLPrefetchC",
-                    "STCPrefetch",
-                ]:
+                elif self.fl_method in ["GlueFLPrefetchA", "GlueFLPrefetchB", "GlueFLPrefetchC", "STCPrefetch"]:
                     # This is an estimate by the server
                     can_fully_prefetch = False
                     prefetch_completed_round = 0
@@ -409,7 +418,7 @@ class PrefetchAggregator(Aggregator):
                         prefetched_ratio = min(
                             sum(round_durations[-i:])
                             / self.client_manager.get_download_time(
-                                client_to_run, prefetch_size
+                                client_to_run, prefetch_size, in_bits=False
                             ),
                             1,
                         )
@@ -453,6 +462,7 @@ class PrefetchAggregator(Aggregator):
                             local_steps=client_cfg.local_steps,
                             upload_size=ul_size,
                             download_size=dl_size,
+                            in_bits=False
                         )
                         self.round_evaluator.record_client(
                             client_to_run,
@@ -513,6 +523,7 @@ class PrefetchAggregator(Aggregator):
                             local_steps=client_cfg.local_steps,
                             upload_size=ul_size,
                             download_size=dl_size,
+                            in_bits=False
                         )
                         self.round_evaluator.record_client(
                             client_to_run,
@@ -624,6 +635,337 @@ class PrefetchAggregator(Aggregator):
                 -1,
             )
 
+    def tictak_client_tasks(self, sampled_clients, num_clients_to_collect):
+        """
+        Record sampled client execution information in last round. In the SIMULATION_MODE,
+        further filter the sampled_client and pick the top num_clients_to_collect clients.
+
+        Args:
+            sampled_clients (list of int): Sampled clients from client manager
+            num_clients_to_collect (int): The number of clients actually needed for next round.
+
+        Returns:
+            tuple: Return the sampled clients and client execution information in the last round.
+
+        """
+
+        if len(sampled_clients) == 0:
+            return [], [], [], {}, 0, []
+
+        if self.experiment_mode == commons.SIMULATION_MODE:
+            # NOTE: We try to remove dummy events as much as possible in simulations,
+            # by removing the stragglers/offline clients in overcommitment"""
+            sampledClientsReal = []
+            sampledClientsLost = []
+            completionTimes = []
+            virtual_client_clock = {}
+
+            # prefetch stats
+            prefetched_clients = set()
+
+            state_dict = self.model_wrapper.get_model().state_dict()
+            layer_numels = []
+            layer_element_sizes = [] # in bytes
+            layer_sizes = [] # in bytes
+
+            batchnorm_numel = 0 # number of batchnorm elements
+            batchnorm_size = 0
+            
+            for key, tensor in state_dict.items():
+                layer_numels.append(tensor.numel())
+                layer_element_sizes.append(tensor.element_size())
+                layer_sizes.append(tensor.numel() * tensor.element_size())
+                if is_batch_norm_layer(key):
+                    batchnorm_numel += tensor.numel()
+                    batchnorm_size += tensor.numel() * tensor.element_size()
+                # logging.info(f"Tensor {key}: numel {tensor.numel()} size {tensor.numel() * tensor.element_size()} element_size {tensor.element_size()} ")
+
+            model_size = sum(layer_sizes) * 8 # bytes to bits
+            model_numel = sum(layer_numels) # equivalent to the size of a bitmap
+
+            batchnorm_size *= 8 # bytes to bits
+            # logging.info(f"Total elem {model_numel}, batchnorm elem {batchnorm_numel}, batchnorm ratio {batchnorm_numel/model_numel}")
+
+            # 1. remove dummy clients that are not available to the end of training
+            for client_to_run in sampled_clients:
+                client_cfg = self.client_conf.get(client_to_run, self.args)
+                exe_cost = {
+                    "computation": 0,
+                    "downstream": 0,
+                    "upstream": 0,
+                    "round_duration": 0,
+                }
+                # =================================================
+                dl_compressor = self.get_compressor(self.download_compressor_type)
+                ul_compressor = self.get_compressor(self.upload_compressor_type)
+                pre_compressor = self.get_compressor(self.prefetch_compressor_type)
+                
+                dl_numel = model_numel - batchnorm_numel
+                ul_numel = model_numel - batchnorm_numel
+
+                pre_numel = 0
+
+                dl_aux_size = 0
+                ul_aux_size = 0
+                pre_aux_size = 0
+
+                dl_size = model_size - batchnorm_size
+                ul_size = model_size - batchnorm_size
+
+                if self.args.compress_batch_norm:
+                    # If batchnorm is compressed, then size/numels elements for download and upload equals the model's size/numel
+                    dl_numel = model_numel
+                    ul_numel = model_numel
+                    dl_size = model_size
+                    ul_size = model_size                    
+
+                pre_size = 0
+
+                l = self.last_update_index[client_to_run]
+                l_pre = 0
+                r = self.round - 1
+
+                pre_ratio = 0
+
+                if self.fl_method == FEDAVG:
+                    dl_update_ratio = 1.0
+                else:
+                    dl_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model_wrapper.get_model(), self.mask_record_list, self.device, use_accurate_cache=True)
+
+                if self.enable_prefetch:                 
+                    can_fully_prefetch = False
+
+                    logging.info(f"Estimate prefetch client_id {client_to_run}, l {l}, r {r} and round {self.round}")
+
+                    prefetch_start_i = (
+                        1
+                        if self.args.per_client_prefetch
+                        else max(
+                            min(self.max_prefetch_round + 1, self.round - 1) - 1, 1
+                        )
+                    )
+
+                    for i in range(prefetch_start_i, min(self.max_prefetch_round + 1, self.round - 1)):
+                        pl, pr = self.last_update_index[client_to_run], self.round - 1 - i
+                        if pl >= pr:
+                            logging.info(f"Unable to prefetch because client {client_to_run} participated recently")
+                            break 
+
+                        round_durations = self.round_evaluator.round_durations_aggregated[
+                                max(0, self.round - 1 - i - self.max_prefetch_round) 
+                                : self.round - 1 - i
+                        ]
+                        min_round_duration = min(round_durations)
+
+                        prefetch_update_ratio = Sparsification.check_model_update_overhead(pl, pr, self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True)
+
+                        # Calculate the prefetch size
+                        # TODO quantizing the prefetched model will reduce the model_size and is a case that need to be added
+                        # An optimization, the shared mask will always be changed so there is no point in trying to transfer the model corresponding to the shared mask
+                        pre_size = min(
+                            model_size * (1 - self.shared_mask_ratio),
+                            model_size * prefetch_update_ratio * (1 - self.shared_mask_ratio) + model_numel,
+                        )
+                        # Otherwise, we transfer the latest model or the gradient plus a bitmask
+                        if self.shared_mask_ratio >= 1.0:
+                            pre_size = min(
+                            model_size,
+                            model_size * prefetch_update_ratio + model_numel,
+                        )
+
+                        temp_pre_round = (
+                            self.client_manager.get_download_time(client_to_run, pre_size)
+                            / min_round_duration
+                        )
+                        logging.info(
+                            f"Prefetch l {pl} r {pr} used min round duration {min_round_duration}, required prefetch round {temp_pre_round},  all usable round durations {round_durations} pre_size {pre_size}"
+                        )
+
+                        l_pre = self.round - 1 - i
+
+                        # Represents how much of the prefetch_size can be downloaded in the prefetch window
+                        # Note 0 <= pre_ratio <= 1, where pre_ratio = 1 means the client can fully prefetch the required amount within its window
+                        pre_ratio = min(
+                            sum(round_durations[-i:]) / self.client_manager.get_download_time(client_to_run, pre_size),
+                            1.,
+                        ) 
+
+                        if temp_pre_round <= i:
+                            can_fully_prefetch = True
+                            break
+
+                    if can_fully_prefetch:
+                        dl_update_ratio = Sparsification.check_model_update_overhead(l_pre, r,  self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True)
+                        prefetched_clients.add(client_to_run)
+                        logging.info(
+                            f"After prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size}"
+                        )
+                        logging.info(f"dl_update_ratio {dl_update_ratio}")
+                    elif l_pre > 0:
+                        # Partial prefetch
+                        # For case where the prefetch budget is not sufficient, but at least something has been fetched
+                        # In this case, on start of the client's scheduled round:
+                        # Finish prefetched portion gets an update equivalent to missing one round
+                        # Unfinished portion gets an update equivalent to missing all the rounds since the client's last update
+                        prefetched_dl_update_ratio = Sparsification.check_model_update_overhead(l_pre, r,  self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True) * pre_ratio
+                        unprefetched_dl_update_ratio = dl_update_ratio * (1. - pre_ratio)
+                        dl_update_ratio = min(prefetched_dl_update_ratio + unprefetched_dl_update_ratio, 1.0)
+                        logging.info(
+                            f"Unable to fully prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}"
+                        )
+                        logging.info(f"dl_update_ratio {dl_update_ratio} prefetched_dl_ratio {prefetched_dl_update_ratio} unprefetched_dl_ratio {unprefetched_dl_update_ratio}")
+
+                    else:
+                        # No prefetch case, only occurs at the start of training or when a client participated last round
+                        pre_size = 0
+                        pre_ratio = 0
+                        logging.info(
+                            f"Cannot prefetch, l_pre {l_pre}, l {l} and r {r}   dl_size {dl_size}  prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}"
+                        )
+
+                if self.fl_method == STC:
+                    dl_numel = math.ceil(dl_numel * dl_update_ratio)
+                    ul_numel = math.ceil(ul_numel * self.total_mask_ratio)
+
+                    dl_aux_size += model_numel # Can actually be further reduced to just the number of non-batchnorm elements
+                    ul_aux_size += model_numel
+
+                    # TODO verify and remove
+                    # If quantization is not used
+                    dl_size = min(model_size * dl_update_ratio + model_numel, model_size)
+                    ul_size = self.total_mask_ratio * model_size + model_numel
+                elif self.fl_method == APF:
+                    # TODO Verify and potentially remove
+                    if self.last_update_index[client_to_run] == 0:
+                        dl_update_ratio = 1.
+
+                    dl_numel = math.ceil(dl_numel * dl_update_ratio) # Verify this case for prefetch
+                    ul_numel = math.ceil(ul_numel * self.apf_ratio)
+
+                    dl_aux_size += model_numel
+                    ul_aux_size += 0
+
+                    # TODO verify and remove
+                    # If quantization is not used
+                    dl_size = min(model_size * dl_update_ratio + model_numel, model_size)
+                    ul_size = self.apf_ratio * model_size
+
+                elif self.fl_method == GLUEFL:
+                    dl_numel = math.ceil(dl_numel * dl_update_ratio)
+                    ul_numel = math.ceil(ul_numel * self.total_mask_ratio)
+
+                    dl_aux_size += model_numel
+                    # Either a bitmap or indices of unique mask positions
+                    ul_aux_size += min(model_numel, (self.total_mask_ratio - self.shared_mask_ratio) * model_numel * 32)
+
+                    # TODO verify and remove
+                    # If quantization is not used 
+                    dl_size = min(model_size * dl_update_ratio + model_numel, model_size)
+                    ul_size = self.total_mask_ratio * model_size + min((self.total_mask_ratio - self.shared_mask_ratio) * model_size, model_numel)
+
+
+                # Apply quantization if enabled
+                if self.download_compressor_type != NO_QUANTIZATION:
+                    dl_size = dl_compressor.calculate_size(dl_numel) + dl_aux_size
+                else:
+                    # calculated_dl_size = dl_numel * 32 + batchnorm_size
+                    # logging.info(f"dl_numel {dl_numel} dl model size {model_size} calculated model size {calculated_dl_size}")
+                    pass
+                
+                if self.upload_compressor_type != NO_QUANTIZATION:
+                    ul_size = ul_compressor.calculate_size(ul_numel) + ul_aux_size
+                else:
+                    pass
+
+                
+                if self.enable_prefetch and self.prefetch_compressor_type != NO_QUANTIZATION:
+                    # TODO Quantization on prefetch is not implemented so this will never happen
+                    pre_size = pre_compressor.calculate_size(pre_numel) + pre_aux_size
+
+                if not self.args.compress_batch_norm:
+                    dl_size += batchnorm_size
+                    ul_size += batchnorm_size
+
+                # Revert to sending the full model if the compressed download or upload size exceeds the full model size
+                dl_size = min(dl_size, model_size)
+                ul_size = min(ul_size, model_size)
+                # No restrictions on prefetch size even though competetive algorithms shoul try to reduce the prefetch size by as much as possible
+
+                exe_cost = self.client_manager.get_completion_time(client_to_run, batch_size=client_cfg.batch_size, local_steps=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
+                self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=pre_size)
+
+
+                # =================================================
+
+                
+                roundDuration = (
+                    exe_cost["computation"]
+                    + exe_cost["downstream"]
+                    + exe_cost["upstream"]
+                )
+                exe_cost["round"] = roundDuration
+                virtual_client_clock[client_to_run] = exe_cost
+                self.last_update_index[client_to_run] = (
+                    self.round - 1
+                )  # Client knows the global state from the previous round
+
+                # if the client is not active by the time of collection, we consider it is lost in this round
+                if self.client_manager.isClientActive(
+                    client_to_run, roundDuration + self.global_virtual_clock
+                ):
+                    sampledClientsReal.append(client_to_run)
+                    completionTimes.append(roundDuration)
+                else:
+                    sampledClientsLost.append(client_to_run)
+            num_clients_to_collect = min(num_clients_to_collect, len(completionTimes))
+            
+            # 2. get the top-k completions to remove stragglers
+            workers_sorted_by_completion_time = sorted(
+                range(len(completionTimes)), key=lambda k: completionTimes[k]
+            )
+            top_k_index = workers_sorted_by_completion_time[:num_clients_to_collect]
+            clients_to_run = [sampledClientsReal[k] for k in top_k_index]
+
+            dummy_clients = [
+                sampledClientsReal[k]
+                for k in workers_sorted_by_completion_time[num_clients_to_collect:]
+            ]
+            round_duration = completionTimes[top_k_index[-1]]
+            completionTimes.sort()
+
+            slowest_client_id = sampledClientsReal[top_k_index[-1]]
+            logging.info(
+                f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}"
+            )
+            # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
+
+            return (
+                clients_to_run,
+                dummy_clients,
+                sampledClientsLost,
+                virtual_client_clock,
+                round_duration,
+                completionTimes[:num_clients_to_collect],
+            )
+        else:
+            virtual_client_clock = {
+                client: {"computation": 1, "communication": 1}
+                for client in sampled_clients
+            }
+            completionTimes = [1 for c in sampled_clients]
+            # return TictakResponse(sampled_clients, sampled_clients, [], virtual_client_clock, 1, compl)
+            return (
+                sampled_clients,
+                sampled_clients,
+                [],
+                virtual_client_clock,
+                1,
+                completionTimes,
+                -1,
+            )
+
+
+
     def client_completion_handler(self, results):
         """We may need to keep all updates from clients,
         if so, we need to append results to the cache
@@ -657,56 +999,6 @@ class PrefetchAggregator(Aggregator):
         self.model_in_update += 1
         self.update_weight_aggregation(results)
         
-        """
-        # All clients are done
-        if self._is_last_result_in_round():
-            self.quantizeQSGD()
-            self.apply_and_update_mask()
-            spar_ratio = Sparsification.check_sparsification_ratio(
-                [self.compressed_gradient]
-            )
-            mask_ratio = Sparsification.check_sparsification_ratio([self.shared_mask])
-            logging.info(f"Gradients sparsification: {spar_ratio}")
-            logging.info(f"Mask sparsification: {mask_ratio}")
-
-            # ==== update global model =====
-
-
-            model_state_dict = self.model_wrapper.get_model().state_dict()
-            for idx, param in enumerate(model_state_dict.values()):
-                param.data = (
-                    param.data.to(device=self.device).to(dtype=torch.float32)
-                    - self.compressed_gradient[idx]
-                )
-            self.model_weights = model_state_dict.values()
-            self.model_wrapper.get_model().load_state_dict(model_state_dict)
-
-
-
-            # For testing quantification scaling factor
-            if self.round == 1:
-                self.first_state_dict = model_state_dict
-            else:
-                compressor = QSGDCompressor(127)
-                first_scaling_factors = []
-                for first_tensor, cur_tensor in zip(self.first_state_dict.values(), model_state_dict.values()):
-                    tmp = first_tensor - cur_tensor
-                    tmp_compressed, ctx = compressor.compress(tmp)
-                    first_scaling_factors.append(tmp_compressed[1].numpy())
-                logging.info(f"multi-round avg scaling factor {numpy.mean(first_scaling_factors)} (r: {self.round - 1})")
-
-
-            # ===== update mask list =====
-            mask_list = []
-            for p_idx, key in enumerate(self.model_wrapper.get_model().state_dict().keys()):
-                mask = (self.compressed_gradient[p_idx] != 0).to(
-                    device=torch.device("cpu")
-                )
-                mask_list.append(mask)
-
-            self.mask_record_list.append(mask_list)
-        """
-        
         self.update_lock.release()
 
     def update_weight_aggregation(self, results):
@@ -720,13 +1012,46 @@ class PrefetchAggregator(Aggregator):
                 for param in self.model_wrapper.get_model().state_dict().values()
             ]
 
-        gradient_weight = self.get_gradient_weight(results["client_id"])
-        # gradient_weight = (1.0 / self.tasks_round)
-        # logging.info(f"weight: {self.get_gradient_weight(results['client_id'])} {results['client_id']}")
-        # keys = []
-
         keys = list(self.model_wrapper.get_model().state_dict().keys())
+
+        # Perform decompression if needed
+        # For now, the compressed then decompressed gradient is transmitted
+        # so there is no need for decompression
+        update_gradient = [
+            torch.from_numpy(param).to(device=self.device) for param in results["update_gradient"]
+        ]
+
+        """
+        update_gradient = None
+        if self.upload_compressor_type == NO_QUANTIZATION:
+            update_gradient = [
+                torch.from_numpy(param).to(device=self.device) for param in results["update_gradient"]
+            ]
+        elif self.upload_compressor_type == QSGD:
+            compressor = QSGDCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor1(compressor, results["update_gradient"], keys, to_device=True)
+        elif self.upload_compressor_type == QSGD_BUCKET:
+            compressor = QSGDBucketCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor1(compressor, results["update_gradient"], keys, to_device=True)
+        elif self.upload_compressor_type == LFL:
+            compressor = LFLCompressor(self.args.quantization_level)
+            update_gradient = self.apply_decompressor1(compressor, results["update_gradient"], keys, to_device=True)
+        else:
+            raise NotImplementedError(f"Upload compression method {self.download_compressor_type} is not implemented")
+        """
+
+        # Aggregate gradients with specific gradient weights
+        gradient_weight = self.get_gradient_weight(results["client_id"])
+        # logging.info(f"weight: {self.get_gradient_weight(results['client_id'])} {results['client_id']}")
         
+        for idx, key in enumerate(keys):
+            if is_batch_norm_layer(key):
+                # Batch norm layer is not weighted
+                self.compressed_gradient[idx] += update_gradient[idx] * (1.0 / self.tasks_round)
+            else:
+                self.compressed_gradient[idx] += update_gradient[idx] * gradient_weight
+
+        """
         for idx, param in enumerate(self.model_wrapper.get_model().state_dict().values()):
             # Batch norm layer is not weighted
             if not (("num_batches_tracked" in keys[idx]) or ("running" in keys[idx])):
@@ -740,10 +1065,10 @@ class PrefetchAggregator(Aggregator):
                 self.compressed_gradient[idx] += torch.from_numpy(
                     results["update_gradient"][idx]
                 ).to(device=self.device) * (1.0 / self.tasks_round)
+        """
 
         # All clients are done
         if self._is_last_result_in_round():
-            self.quantizeQSGD()
             self.apply_and_update_mask()
             spar_ratio = Sparsification.check_sparsification_ratio(
                 [self.compressed_gradient]
@@ -787,6 +1112,9 @@ class PrefetchAggregator(Aggregator):
                 mask_list.append(mask)
 
             self.mask_record_list.append(mask_list)
+
+            # ==== update quantized update =====
+            self.update_quantized_update()
         
 
     def get_gradient_weight(self, client_id):
@@ -822,68 +1150,6 @@ class PrefetchAggregator(Aggregator):
             # importance = 1./self.tasks_round
             prob = 1.0 / self.tasks_round
         return prob
-    
-    def quantizeQSGD(self):
-        # Quantum number set to 127 to use full 8 bit floating point
-        compressor = QSGDCompressor(127)
-
-        keys = []
-        for idx, key in enumerate(self.model_wrapper.get_model().state_dict()):
-            keys.append(key)
-
-        client_side_gradient_list = [
-                torch.zeros_like(param.data)
-                .to(device=self.device)
-                .to(dtype=torch.float32)
-                for param in self.model_wrapper.get_model().state_dict().values()
-        ]
-        # cum_decompressed_list = [
-        #         torch.zeros_like(param.data)
-        #         .to(device=self.device)
-        #         .to(dtype=torch.float32)
-        #         for param in self.model_wrapper.get_model().state_dict().values()
-        # ]
-        cur_compressed_tensors = []
-        cur_scaling_factors = []
-
-        for idx, key in enumerate(self.model_wrapper.get_model().state_dict()):
-            # TODO Verify if this affects anything
-            if ("num_batches_tracked" in keys[idx]) or ("running" in keys[idx]):
-                continue
-
-            cur_compressed_update, ctx= compressor.compress(self.compressed_gradient[idx])
-            # QSGD compressors a tensor into a tuple containing tensor and norm
-            cur_compressed_tensors.append(cur_compressed_update[0])
-            cur_scaling_factors.append(cur_compressed_update[1].numpy())
-            client_side_gradient_list[idx] = compressor.decompress(cur_compressed_update, ctx)
-
-            # self.cum_gradients[idx] += self.compressed_gradient[idx]
-            # cum_compressed, cum_ctx = compressor.compress(self.cum_gradients[idx])
-            # cum_decompressed_list[idx] = compressor.decompress(cum_compressed, cum_ctx)
-
-        
-        
-        prequantization_ratio = Sparsification.check_sparsification_ratio([self.compressed_gradient])
-        quantization_ratio = Sparsification.check_sparsification_ratio([client_side_gradient_list])
-        cross_round_compressed_gradient_difference_ratio = Sparsification.check_gradient_difference(self.last_round_compressed_gradient, cur_compressed_tensors)
-        cross_round_decompressed_gradient_difference_ratio = Sparsification.check_gradient_difference(self.last_round_decompressed_gradient, client_side_gradient_list)
-        multi_round_gradient_difference_ratio = Sparsification.check_gradient_difference(self.first_compressed_gradient, cur_compressed_tensors)
-
-        # cumulative_quantization_ratio = Sparsification.check_sparsification_ratio([cum_decompressed_list])
-        logging.info(f"prequantization ratio {prequantization_ratio}")
-        # logging.info(f"scaling factors list{cur_scaling_factors}")
-        logging.info(f"quantization ratio {quantization_ratio} avg scaling factor {numpy.mean(cur_scaling_factors)}")
-        logging.info(f"cross-round compressed gradient difference ratio {cross_round_compressed_gradient_difference_ratio}")
-        logging.info(f"cross-round decompressed gradient difference ratio {cross_round_decompressed_gradient_difference_ratio}")
-        logging.info(f"multi-round compressed gradient difference ratio {multi_round_gradient_difference_ratio} (r: {self.round - 1})")
-
-
-        # logging.info(f"cumulative quantization ratio {cumulative_quantization_ratio}, round {self.round}")
-
-        self.last_round_compressed_gradient = cur_compressed_tensors
-        self.last_round_decompressed_gradient = client_side_gradient_list
-        if self.round == 1:
-            self.first_compressed_gradient = cur_compressed_tensors
 
     def apply_and_update_mask(self):
         compressor_tot = TopKCompressor(compress_ratio=self.total_mask_ratio)
@@ -970,7 +1236,99 @@ class PrefetchAggregator(Aggregator):
                     * float(self.feasible_client_count)
                 ),
             }
-        return train_config, self.model_wrapper.get_weights()
+        return train_config, self.get_train_update_virtual()
+    
+    def get_train_update_virtual(self):
+        """
+        Transfer the client-side model that already applies the quantized update 
+        """
+        
+        if (self.download_compressor_type == NO_QUANTIZATION) or self.round == 1:
+            return self.model_wrapper.get_weights()
+        else:
+            return self.quantized_update
+        
+    def get_compressor(self, compressor_type):
+        if compressor_type == NO_QUANTIZATION:
+            return IdentityCompressor()
+        if compressor_type == QSGD:
+            return QSGDCompressor(self.args.quantization_level)
+        elif compressor_type == QSGD_BUCKET:
+            return QSGDBucketCompressor(self.args.quantization_level)
+        elif compressor_type == LFL:
+            return LFLCompressor(self.args.quantization_level)
+        else:
+            raise NotImplementedError(f"Download compression method {self.download_compressor_type} is not implemented")
+
+    def update_quantized_update(self):
+        model_weights = self.model_wrapper.get_weights_torch()
+        keys = self.model_wrapper.get_keys()
+        compressor = self.get_compressor(self.download_compressor_type)
+
+        # Quantization is applied
+        if self.quantization_target == FULL_MODEL:
+            compressed_update = self.apply_compressor(compressor, model_weights, keys)
+            decompressed_update = self.apply_decompressor(compressor, compressed_update, keys)
+            self.quantized_update = [param.cpu() for param in decompressed_update]
+        elif self.quantization_target == DIFF_MODEL:
+            weight_diff = []
+            for weight, prev_weight in zip(model_weights, self.prev_model_weights):
+                weight_diff.append(weight - prev_weight)
+            compressed_update = self.apply_compressor(compressor, weight_diff, keys)
+            decompressed_update = self.apply_decompressor(compressor, compressed_update, keys)
+
+            logging.info(f"Cross-round weight diff {Sparsification.check_sparsification_ratio([weight_diff])}")
+
+            res = []
+            for idx, key in enumerate(keys):
+                res.append(self.prev_model_weights[idx] + decompressed_update[idx])
+            self.prev_model_weights = copy.deepcopy(model_weights) # deepcopy likely not necessary
+
+            self.quantized_update = [param.numpy() for param in res]
+        elif self.quantization_target == DIFF_ESTIMATE:            
+            weight_diff = []
+            for weight, est_weight in zip(model_weights, self.client_estimate_weights):
+                weight_diff.append(weight - est_weight)
+
+            compressed_update = self.apply_compressor(compressor, weight_diff, keys)
+            decompressed_update = self.apply_decompressor(compressor, compressed_update, keys)
+
+            for idx, key in enumerate(keys):
+                self.client_estimate_weights[idx] += decompressed_update[idx]
+
+            self.quantized_update = [param.numpy() for param in self.client_estimate_weights]
+
+        else:
+            raise NotImplementedError(f"Download compression method {self.download_compressor_type} is not implemented")
+        
+    
+    def apply_compressor(self, compressor: Compressor, params, keys: List[str]):
+        res = []
+        for param, key in zip(params, keys):
+            cur_compressed_update, ctx = None, None
+            # TODO Verify fl batch norm paper to see if quantization affects anything
+            if is_batch_norm_layer(key):
+                cur_compressed_update, ctx = param, (param.shape, "batch_norm")
+            else:
+                cur_compressed_update, ctx = compressor.compress(param)
+
+            res.append((cur_compressed_update, ctx))
+
+        return res
+    
+    def apply_decompressor(self, compressor: Compressor, params, keys: List[str]) -> List[torch.Tensor]:
+        res = []
+        for (param, ctx), key in zip(params, keys):
+            cur_decompressed_update = None
+            # TODO Verify fl batch norm paper to see if quantization affects anything
+            if is_batch_norm_layer(key):
+                cur_decompressed_update = param
+            else:
+                cur_decompressed_update = compressor.decompress(param, ctx)
+
+            res.append(cur_decompressed_update)
+        return res    
+
 
     def CLIENT_PING(self, request, context):
         """Handle client ping requests
@@ -1035,24 +1393,25 @@ class PrefetchAggregator(Aggregator):
         Otherwise, use uniform sampling.
         """
         if self.sampling_strategy == "STICKY":
-            if self.fl_method == "GlueFLPrefetchA":
-                self.sampled_sticky_clients, self.sampled_changed_clients = (
-                    self.client_manager.presample_sticky_a(
-                        self.round, self.global_virtual_clock
+            if self.enable_prefetch:
+                if self.args.presample_strategy == SIMPLE:
+                    self.sampled_sticky_clients, self.sampled_changed_clients = (
+                        self.client_manager.presample_sticky_simple(
+                            self.round, self.global_virtual_clock
+                        )
                     )
-                )
-            elif self.fl_method == "GlueFLPrefetchB":
-                self.sampled_sticky_clients, self.sampled_changed_clients = (
-                    self.client_manager.presample_sticky_b(
-                        self.round, self.global_virtual_clock
+                elif self.args.presample_strategy == UNIFORM:
+                    self.sampled_sticky_clients, self.sampled_changed_clients = (
+                        self.client_manager.presample_sticky_uniform(
+                            self.round, self.global_virtual_clock
+                        )
                     )
-                )
-            elif self.fl_method == "GlueFLPrefetchC":
-                self.sampled_sticky_clients, self.sampled_changed_clients = (
-                    self.client_manager.presample_sticky_c(
-                        self.round, self.global_virtual_clock
+                elif self.args.presample_strategy == SPEED_PROB:
+                    self.sampled_sticky_clients, self.sampled_changed_clients = (
+                        self.client_manager.presample_sticky_speed_prob(
+                            self.round, self.global_virtual_clock
+                        )
                     )
-                )
             else:
                 self.sampled_sticky_clients, self.sampled_changed_clients = (
                     self.client_manager.select_participants_sticky(
@@ -1159,7 +1518,7 @@ class PrefetchAggregator(Aggregator):
                 self.client_manager.update_sticky_group(change_to_run)
 
         else:
-            if self.fl_method == "STCPrefetch":
+            if self.enable_prefetch:
                 self.sampled_participants = self.client_manager.presample(
                     self.round, self.global_virtual_clock
                 )
@@ -1205,8 +1564,8 @@ class PrefetchAggregator(Aggregator):
                 client_id,
                 last_round_avg_util,
                 time_stamp=self.round,
-                duration=self.virtual_client_clock[client_id]["computation"]
-                + self.virtual_client_clock[client_id]["communication"],
+                # TODO switch to using both download and upload time when we eventually test Oort
+                duration=self.virtual_client_clock[client_id]["computation"] + self.virtual_client_clock[client_id]["communication"], 
                 success=False,
             )
 
