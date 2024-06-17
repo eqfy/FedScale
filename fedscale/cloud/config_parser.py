@@ -2,6 +2,12 @@ import argparse
 
 from fedscale.cloud import commons
 
+def parse_bool(s: str) -> bool:
+    try:
+        return {'true': True, 'false': False}[s.lower()]
+    except KeyError:
+        raise argparse.ArgumentTypeError(f"expected True/False, got: {s}")
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--job_name", type=str, default="demo_job")
 parser.add_argument("--log_path", type=str, default="./", help="default path is ../log")
@@ -296,14 +302,30 @@ parser.add_argument('--prefetch_estimation_start', type=int, default=5, help="ho
 parser.add_argument('--sampling_strategy', type=str, default="UNIFORM", help="sampling strategy")
 parser.add_argument('--sticky_group_size', type=int, default=100, help="sticky group size used for sticky sampling")
 parser.add_argument('--sticky_group_change_num', type=int, default=20, help="number of new clients per round in sticky sampling")
-parser.add_argument('--fl_method', type=str, default="GlueFL", help="FL method")
 parser.add_argument('--regenerate_epoch', type=int, default=10, help="number of epochs before renegerating mask")
 parser.add_argument('--augmentation_factor', type=float, default=3.0, help="Augmentation factor for finding client compute latency")
 parser.add_argument('--upload_factor', type=float, default=1.0, help="Upload factor for finding client upload latency")
 parser.add_argument('--download_factor', type=float, default=1.0, help="Download factor for finding client download latency")
 parser.add_argument('--compensation_dir', type=str, default="/mnt/fl/benchmark/compensation", help="Directory for storing compensation")
 parser.add_argument('--overcommit_weight', type=float, default=-1, help="How much overcommitment is allocated to sticky vs non-sticky group. If -1, then overcommitment is applied uniformly/")
-parser.add_argument('--per_client_prefetch', type=bool, default=True, help="Determines whether each client individually assess the number of prefetch rounds it will take")
+parser.add_argument('--use_compensation', type=parse_bool, default=False, help='Enables client-side compensation')
+
+# for Prefetch
+parser.add_argument('--fl_method', type=str, default="FedAvg", help="FL method")
+parser.add_argument('--enable_prefetch', type=parse_bool, default=False, help="whether prefetch is enabled")
+parser.add_argument('--per_client_prefetch', type=parse_bool, default=True, help="Determines whether each client individually assess the number of prefetch rounds it will take")
+parser.add_argument('--presample_strategy', type=str, default="None", help="Method used for presampling for sticky sampling")
+parser.add_argument('--compress_batch_norm', type=parse_bool, default=False, help="whether to compress the batch normalization layers")
+parser.add_argument('--download_compressor_type', type=str, default="None", help="Determines what compression method is used for server to client communciation")
+parser.add_argument('--upload_compressor_type', type=str, default="None", help="Determines what compression method is used for client to server communciation")
+parser.add_argument('--prefetch_compressor_type', type=str, default="None", help="Determines what compression method is used for prefetch communciation")
+parser.add_argument('--quantization_target', type=str, default="DIFF", help="Determines what is quantized during client to server communciation")
+# TODO switch to separate quantization levels for download and upload
+parser.add_argument('--quantization_level', type=int, default=256, help="a fixed quantization level used for some quantization methods")
+# TODO Unused, ideally download_compressor_type should contain a list of compressors which are applied in order
+parser.add_argument('--download_sparsification_type', type=str, default="None", help="what sparsification method is used for server to client communication")
+parser.add_argument('--upload_sparsification_type', type=str, default="None", help="what sparsification method is used for client to server communication")
+
 
 
 args, unknown = parser.parse_known_args()
