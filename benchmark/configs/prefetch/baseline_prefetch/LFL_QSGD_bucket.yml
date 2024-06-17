@@ -30,7 +30,7 @@ setup_commands:
 # Default parameters are specified in config_parser.py, wherein more description of the parameter can be found
 
 job_conf: 
-    - job_name: LFL_prefetch                 # Generate logs under this folder: log_path/job_name/time_stamp
+    - job_name: LFL_QSGD_bucket_prefetch                 # Generate logs under this folder: log_path/job_name/time_stamp
     - log_path: $FEDSCALE_HOME/benchmark # Path of log files
     - num_participants: 30                      # Number of participants per round, we use K=100 in our paper, large K will be much slower
     - data_set: femnist                     # Dataset: openImg, google_speech, stackoverflow
@@ -56,16 +56,18 @@ job_conf:
     - total_mask_ratio: 1.0 # No sparsification - 1.0
     - shared_mask_ratio: 1.0 # No sparsification - 1.0
     # Quantization
-    - download_compressor_type: LFL # Options: None, QSGD, QSGD_bucket, LFL
-    - upload_compressor_type: LFL # Options: None, QSGD, QSGD_bucket, LFL
+    - download_compressor_type: QSGD_bucket # Options: None, QSGD, QSGD_bucket, LFL
+    - upload_compressor_type: QSGD_bucket # Options: None, QSGD, QSGD_bucket, LFL
     - quantization_target: DIFF_ESTIMATE # Options: DIFF, FULL, DIFF_ESTIMATE
     - quantization_level: 127
+    # Compensation
+    - use_compensation: True
     # System factors
     - augmentation_factor: 0.4
     - download_factor: 0.8
     - upload_factor: 1.2
     # Prefetch
-    - enable_prefetch: False
+    - enable_prefetch: True
     - max_prefetch_round: 1
     # Overcommit
     - overcommitment: 1.3

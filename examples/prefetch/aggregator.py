@@ -608,7 +608,6 @@ class PrefetchAggregator(Aggregator):
             logging.info(
                 f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}"
             )
-            # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
 
             return (
                 clients_to_run,
@@ -662,6 +661,7 @@ class PrefetchAggregator(Aggregator):
 
             # prefetch stats
             prefetched_clients = set()
+            prefetch_lost_clients = []
 
             state_dict = self.model_wrapper.get_model().state_dict()
             layer_numels = []
@@ -726,13 +726,31 @@ class PrefetchAggregator(Aggregator):
                 r = self.round - 1
 
                 pre_ratio = 0
+                lost_during_prefetch = False
 
                 if self.fl_method == FEDAVG:
                     dl_update_ratio = 1.0
                 else:
                     dl_update_ratio = Sparsification.check_model_update_overhead(l, r, self.model_wrapper.get_model(), self.mask_record_list, self.device, use_accurate_cache=True)
 
-                if self.enable_prefetch:                 
+                if self.enable_prefetch:  
+                    # Check if the client is lost during prefetch
+                    # This is doable because we are calculating prefetch from the viewpoint of the scheduled round after prefetch
+                    round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - self.max_prefetch_round):]
+                    total_prefetch_window = numpy.sum(round_durations)
+                    time_at_presample = self.global_virtual_clock - total_prefetch_window
+                    time_elapsed = 0
+                    time_when_client_was_definitely_lost = numpy.inf
+
+                    for dur in round_durations:
+                        time_elapsed += dur
+                        if not self.client_manager.isClientActive(client_to_run, time_at_presample + time_elapsed):
+                            time_when_client_was_definitely_lost = time_at_presample + time_elapsed
+                            lost_during_prefetch = True
+                            prefetch_lost_clients.append(client_to_run)
+                            break
+
+                    # Start calculating when to prefetch and by how much
                     can_fully_prefetch = False
 
                     logging.info(f"Estimate prefetch client_id {client_to_run}, l {l}, r {r} and round {self.round}")
@@ -773,6 +791,14 @@ class PrefetchAggregator(Aggregator):
                             model_size * prefetch_update_ratio + model_numel,
                         )
 
+                        # Client failed before attempting prefetch
+                        prefetch_duration = self.client_manager.get_download_time(client_to_run, pre_size)
+                        prefetch_window = sum(round_durations[-i:])
+                        if time_when_client_was_definitely_lost < self.global_virtual_clock - min(prefetch_duration, prefetch_window):
+                            pre_size = 0
+                            break 
+
+                        # Estimate how many rounds is needed to prefetch
                         temp_pre_round = (
                             self.client_manager.get_download_time(client_to_run, pre_size)
                             / min_round_duration
@@ -785,22 +811,21 @@ class PrefetchAggregator(Aggregator):
 
                         # Represents how much of the prefetch_size can be downloaded in the prefetch window
                         # Note 0 <= pre_ratio <= 1, where pre_ratio = 1 means the client can fully prefetch the required amount within its window
-                        pre_ratio = min(
-                            sum(round_durations[-i:]) / self.client_manager.get_download_time(client_to_run, pre_size),
-                            1.,
-                        ) 
+                        pre_ratio = min(prefetch_window / prefetch_duration, 1.) 
 
                         if temp_pre_round <= i:
                             can_fully_prefetch = True
                             break
 
-                    if can_fully_prefetch:
+                    if lost_during_prefetch:
+                        pre_size *= pre_ratio * (time_when_client_was_definitely_lost - time_at_presample) / total_prefetch_window
+                        logging.info(f"Lost during prefetch, pre_size {pre_size} l {l} r {r}")
+                    elif can_fully_prefetch:
                         dl_update_ratio = Sparsification.check_model_update_overhead(l_pre, r,  self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True)
                         prefetched_clients.add(client_to_run)
                         logging.info(
-                            f"After prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size}"
+                            f"After prefetch, l_pre {l_pre} l {l} r {r} prefetch_ratio {pre_ratio} prefetch_size {pre_size} dl_update_ratio {dl_update_ratio} "
                         )
-                        logging.info(f"dl_update_ratio {dl_update_ratio}")
                     elif l_pre > 0:
                         # Partial prefetch
                         # For case where the prefetch budget is not sufficient, but at least something has been fetched
@@ -811,10 +836,8 @@ class PrefetchAggregator(Aggregator):
                         unprefetched_dl_update_ratio = dl_update_ratio * (1. - pre_ratio)
                         dl_update_ratio = min(prefetched_dl_update_ratio + unprefetched_dl_update_ratio, 1.0)
                         logging.info(
-                            f"Unable to fully prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}"
+                            f"Unable to fully prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'} dl_update_ratio {dl_update_ratio} prefetched_dl_ratio {prefetched_dl_update_ratio} unprefetched_dl_ratio {unprefetched_dl_update_ratio}"
                         )
-                        logging.info(f"dl_update_ratio {dl_update_ratio} prefetched_dl_ratio {prefetched_dl_update_ratio} unprefetched_dl_ratio {unprefetched_dl_update_ratio}")
-
                     else:
                         # No prefetch case, only occurs at the start of training or when a client participated last round
                         pre_size = 0
@@ -865,7 +888,14 @@ class PrefetchAggregator(Aggregator):
 
 
                 # Apply quantization if enabled
-                if self.download_compressor_type != NO_QUANTIZATION:
+                if self.download_compressor_type in [LFL, QSGD, QSGD_BUCKET]:
+                    # Reserved for model diff quantization
+                    if self.enable_prefetch or (r - l) == 1:
+                        dl_size = dl_compressor.calculate_size(dl_numel) + dl_aux_size
+                    else:
+                        dl_size = model_size
+                elif self.download_compressor_type != NO_QUANTIZATION:
+                    # Reserved for whole model quantization
                     dl_size = dl_compressor.calculate_size(dl_numel) + dl_aux_size
                 else:
                     # calculated_dl_size = dl_numel * 32 + batchnorm_size
@@ -889,7 +919,7 @@ class PrefetchAggregator(Aggregator):
                 # Revert to sending the full model if the compressed download or upload size exceeds the full model size
                 dl_size = min(dl_size, model_size)
                 ul_size = min(ul_size, model_size)
-                # No restrictions on prefetch size even though competetive algorithms shoul try to reduce the prefetch size by as much as possible
+                # No restrictions on prefetch size even though competetive algorithms should try to reduce the prefetch size by as much as possible
 
                 exe_cost = self.client_manager.get_completion_time(client_to_run, batch_size=client_cfg.batch_size, local_steps=client_cfg.local_steps, upload_size=ul_size, download_size=dl_size)
                 self.round_evaluator.record_client(client_to_run, dl_size, ul_size, exe_cost, prefetch_dl_size=pre_size)
@@ -908,11 +938,12 @@ class PrefetchAggregator(Aggregator):
                 self.last_update_index[client_to_run] = (
                     self.round - 1
                 )  # Client knows the global state from the previous round
-
-                # if the client is not active by the time of collection, we consider it is lost in this round
-                if self.client_manager.isClientActive(
-                    client_to_run, roundDuration + self.global_virtual_clock
-                ):
+                
+                if lost_during_prefetch:
+                    self.round_evaluator.record_lost_prefetch(pre_size)
+                    sampledClientsLost.append(client_to_run)
+                elif self.client_manager.isClientActive(client_to_run, roundDuration + self.global_virtual_clock):
+                    # if the client is not active by the time of collection, we consider it is lost in this round
                     sampledClientsReal.append(client_to_run)
                     completionTimes.append(roundDuration)
                 else:
@@ -937,6 +968,7 @@ class PrefetchAggregator(Aggregator):
             logging.info(
                 f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}"
             )
+            logging.info(f"During prefetch, the following clients went offline {prefetch_lost_clients}")
             # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
 
             return (
