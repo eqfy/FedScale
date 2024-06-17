@@ -41,6 +41,7 @@ build/
 docker/*
 !docker/*.*
 .vscode
+temp
 fedscale/cache
 fedscale/tmp*
 fedscale/*.tflite

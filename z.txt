@@ -2,7 +2,7 @@
 salloc --time=2:59:0 --mem=8G --ntasks=1 --cpus-per-task=6 --account=def-mlecuyer
 
 # GPU Interactive session
-salloc --time=1:0:0 --mem=16G --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --account=def-mlecuyer
+salloc --time=0:20:0 --mem=16G --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --account=def-mlecuyer
 
 
 #!/bin/bash
