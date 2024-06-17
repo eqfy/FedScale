@@ -27,6 +27,7 @@ class RoundEvaluator(object):
         self.bw_oc = 0.
         self.bw_oc_dl = 0.
         self.bw_oc_prefetch = 0.
+        self.bw_lost_prefetch = 0.
 
         self.round = 0
 
@@ -47,6 +48,8 @@ class RoundEvaluator(object):
         self.cur_durations[client_id] = duration
         self.cur_used_bandwidths[client_id] = {"upstream": ul_size, "downstream": dl_size, "prefetch": prefetch_dl_size}
 
+    def record_lost_prefetch(self, prefetch_dl_size):
+        self.bw_lost_prefetch += prefetch_dl_size
 
     def record_round_completion(self, clients_to_run, dummy_clients, slowest_client_id):
         self.round += 1
@@ -99,10 +102,11 @@ class RoundEvaluator(object):
         logging.info(f"""Bandwidth Stats in bits
         bw_time   ({self.bw_dl + self.bw_ul:.0f}) - time calculation
         bw_real   ({self.bw_dl + self.bw_ul + self.bw_prefetch:.0f}) - only clients participating
-        bw_all    ({self.bw_dl + self.bw_ul + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit
+        bw_all    ({self.bw_dl + self.bw_ul + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch + self.bw_lost_prefetch:.0f}) - all clients including overcommit and lost prefetch
         bw_all_dl ({self.bw_dl + self.bw_prefetch + self.bw_oc_dl + self.bw_oc_prefetch:.0f}) - all clients including overcommit - downstream only
         bw_dl     ({self.bw_dl:.0f}) bw_up({self.bw_ul:.0f}) bw_prefetch({self.bw_prefetch:.0f})
-        bw_oc_dl  ({self.bw_oc_dl:.0f}) bw_oc_up(0) bw_oc_prefetch({self.bw_oc_prefetch:.0f})""")
+        bw_oc_dl  ({self.bw_oc_dl:.0f}) bw_oc_up(0) bw_oc_prefetch({self.bw_oc_prefetch:.0f})
+        bw_lost_prefetch({self.bw_lost_prefetch})""")
         logging.info(f"""Time Stats in s
         t_all({self.total_duration:.2f}) 
         t_dl({self.total_duration_dl:.2f}) t_ul({self.total_duration_ul:.2f}) t_compute({self.total_duration_compute:.2f})
