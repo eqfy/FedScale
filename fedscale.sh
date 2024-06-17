@@ -12,7 +12,6 @@ Help()
    echo -e "\033[1mFedScale is a real system to support FL evaluations and deployments.\033[0m"
    echo
    echo -e "${GREEN}Usage:${NC}"
-   # Display Help
    echo
    echo "help                         Print this Help"
    echo "driver                       Manager jobs (refer to README)"
@@ -26,11 +25,11 @@ dataset()
 
 driver()
 {  
-   python $DIR/docker/driver.py $ARGS;
+   python $DIR/docker/driver.py $ARGS
 }
 
 case "$1" in
-   help ) # display Help
+   help )
       Help
       ;;
    driver )

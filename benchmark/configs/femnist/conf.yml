@@ -37,7 +37,7 @@ job_conf:
     - data_set: femnist                     # Dataset: openImg, google_speech, stackoverflow
     - data_dir: $SLURM_TMPDIR/femnist    # Path of the dataset
     - data_map_file: $SLURM_TMPDIR/femnist/client_data_mapping/train.csv              # Allocation of data to each client, turn to iid setting if not provided
-    - device_conf_file: $FEDSCALE_HOME/benchmark/dataset/data/device_info/client_device_capacity     # Path of the client trace
+    - device_conf_file: $FEDSCALE_HOME/benchmark/dataset/data/device_info/client_device_capacity_ul_dl     # Path of the client trace
     - device_avail_file: $FEDSCALE_HOME/benchmark/dataset/data/device_info/client_behave_trace
     - model: shufflenet_v2_x2_0             # NOTE: Please refer to our model zoo README and use models for these small image (e.g., 32x32x3) inputs
 #    - model_zoo: fedscale-torch-zoo
