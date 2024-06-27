@@ -71,6 +71,7 @@ class PrefetchAggregator(Aggregator):
         self.sampled_clients = []
         self.sampled_sticky_clients = []
         self.sampled_changed_clients = []
+        self.prefetch_schedule = [] # A list of dictionaries mapping client to when they started prefetching on each round
 
         # self.compressed_gradient_ctx = []
         # self.cum_gradients = []
@@ -662,6 +663,21 @@ class PrefetchAggregator(Aggregator):
             # prefetch stats
             prefetched_clients = set()
             prefetch_lost_clients = []
+            replaced_clients = []
+
+            # Determines how many rounds of prefetching is available for each client
+            # The server will try to start prefetching on round t+R-prefetch_start_i 
+            # If that is not possible, the server gradually increase prefetch_start_i until it reaches a limit which is at most the max_prefetch_round 
+            prefetch_limit = min(self.max_prefetch_round + 1, self.round - 1)
+            prefetch_start_i = (
+                1
+                if self.args.per_client_prefetch
+                else max(prefetch_limit - 1, 1)
+            )
+            client_prefetch_budgets = {
+                client: (prefetch_start_i, prefetch_limit) 
+                for client in sampled_clients
+            }
 
             state_dict = self.model_wrapper.get_model().state_dict()
             layer_numels = []
@@ -738,32 +754,33 @@ class PrefetchAggregator(Aggregator):
                     # This is doable because we are calculating prefetch from the viewpoint of the scheduled round after prefetch
                     round_durations = self.round_evaluator.round_durations_aggregated[max(0, self.round - 1 - self.max_prefetch_round):]
                     total_prefetch_window = numpy.sum(round_durations)
-                    time_at_presample = self.global_virtual_clock - total_prefetch_window
+                    time_at_presample = max(self.global_virtual_clock - total_prefetch_window, 0)
                     time_elapsed = 0
                     time_when_client_was_definitely_lost = numpy.inf
 
-                    for dur in round_durations:
+                    for i, dur in enumerate(round_durations):
                         time_elapsed += dur
+                        tmp_round = self.round - self.max_prefetch_round + i
                         if not self.client_manager.isClientActive(client_to_run, time_at_presample + time_elapsed):
                             time_when_client_was_definitely_lost = time_at_presample + time_elapsed
                             lost_during_prefetch = True
                             prefetch_lost_clients.append(client_to_run)
+                            if self.args.enable_replace_offline:
+                                replacement_to_run = self.client_manager.get_replacement_client(
+                                    time_at_presample + time_elapsed if self.args.use_latest_online_replacement else time_at_presample, 
+                                    tmp_round,
+                                    sampled_clients) # Use [] if sample with replacement
+                                sampled_clients.append(replacement_to_run)
+                                client_prefetch_budgets[replacement_to_run] = (prefetch_start_i, prefetch_limit - i - 1)
+                                replaced_clients.append((client_to_run, replacement_to_run))
+                                logging.info(f"Client {client_to_run} lost before round {tmp_round}, true training round {self.round}, selected {replacement_to_run} as replacement")
                             break
 
                     # Start calculating when to prefetch and by how much
                     can_fully_prefetch = False
 
                     logging.info(f"Estimate prefetch client_id {client_to_run}, l {l}, r {r} and round {self.round}")
-
-                    prefetch_start_i = (
-                        1
-                        if self.args.per_client_prefetch
-                        else max(
-                            min(self.max_prefetch_round + 1, self.round - 1) - 1, 1
-                        )
-                    )
-
-                    for i in range(prefetch_start_i, min(self.max_prefetch_round + 1, self.round - 1)):
+                    for i in range(client_prefetch_budgets[client_to_run][0], client_prefetch_budgets[client_to_run][1]):
                         pl, pr = self.last_update_index[client_to_run], self.round - 1 - i
                         if pl >= pr:
                             logging.info(f"Unable to prefetch because client {client_to_run} participated recently")
@@ -823,6 +840,7 @@ class PrefetchAggregator(Aggregator):
                     elif can_fully_prefetch:
                         dl_update_ratio = Sparsification.check_model_update_overhead(l_pre, r,  self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True)
                         prefetched_clients.add(client_to_run)
+                        self.prefetch_schedule[-1][client_to_run] = l_pre
                         logging.info(
                             f"After prefetch, l_pre {l_pre} l {l} r {r} prefetch_ratio {pre_ratio} prefetch_size {pre_size} dl_update_ratio {dl_update_ratio} "
                         )
@@ -835,15 +853,25 @@ class PrefetchAggregator(Aggregator):
                         prefetched_dl_update_ratio = Sparsification.check_model_update_overhead(l_pre, r,  self.model_wrapper.get_model(), self.mask_record_list, self.device,  use_accurate_cache=True) * pre_ratio
                         unprefetched_dl_update_ratio = dl_update_ratio * (1. - pre_ratio)
                         dl_update_ratio = min(prefetched_dl_update_ratio + unprefetched_dl_update_ratio, 1.0)
+                        self.prefetch_schedule[-1][client_to_run] = l_pre
                         logging.info(
                             f"Unable to fully prefetch, l_pre {l_pre}, l {l} and r {r} prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'} dl_update_ratio {dl_update_ratio} prefetched_dl_ratio {prefetched_dl_update_ratio} unprefetched_dl_ratio {unprefetched_dl_update_ratio}"
                         )
                     else:
-                        # No prefetch case, only occurs at the start of training or when a client participated last round
+                        # No prefetch case, only occurs at the start of training or when a client participated last round or client is a replacement for the training round
                         pre_size = 0
                         pre_ratio = 0
+                        reason = ""
+                        if client_prefetch_budgets[client_to_run][1] < prefetch_limit:
+                            reason = "replacement client"
+                        elif l == -1:
+                            reason = "initial"
+                        elif 0 <= r - l <= 1:
+                            reason = "sticky"
+                        else:
+                            reason = "slow"
                         logging.info(
-                            f"Cannot prefetch, l_pre {l_pre}, l {l} and r {r}   dl_size {dl_size}  prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {'sticky or initial' if 0 <= r - l <= 1 else 'slow'}"
+                            f"Cannot prefetch, l_pre {l_pre}, l {l} and r {r}   dl_size {dl_size}  prefetch_ratio {pre_ratio}  prefetch_size {pre_size} reason {reason}"
                         )
 
                 if self.fl_method == STC:
@@ -968,7 +996,7 @@ class PrefetchAggregator(Aggregator):
             logging.info(
                 f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes[-1]}"
             )
-            logging.info(f"During prefetch, the following clients went offline {prefetch_lost_clients}")
+            logging.info(f"During prefetch, the following clients went offline {prefetch_lost_clients}\nReplacement map{replaced_clients}")
             # logging.info(f"Successfully prefetch {len(prefetched_clients)} slowest client {slowest_client_id} is prefetched {slowest_client_id in prefetched_clients}  {completionTimes}")
 
             return (
@@ -1150,20 +1178,21 @@ class PrefetchAggregator(Aggregator):
         
 
     def get_gradient_weight(self, client_id):
-        prob = 0
+        # Note that the gradient weight is normalized to be in the interval [0, 1] by multiplying 1 / N
+        weight = 0 
         if self.sampling_strategy == "STICKY":
             if self.round <= 1:
-                prob = 1.0 / float(self.tasks_round)
+                weight = 1.0 / float(self.tasks_round)
             elif client_id in self.sampled_sticky_client_set:
-                prob = (1.0 / float(self.feasible_client_count)) * (
+                weight = (1.0 / float(self.feasible_client_count)) * (
                     1.0
                     / (
                         (float(self.tasks_round) - float(self.sticky_group_change_num))
                         / float(self.sticky_group_size)
                     )
-                )
+                ) # (1 / N) * (S / C), where prob of client being sampled is C / S
             else:
-                prob = (1.0 / float(self.feasible_client_count)) * (
+                weight = (1.0 / float(self.feasible_client_count)) * (
                     1.0
                     / (
                         float(self.sticky_group_change_num)
@@ -1172,16 +1201,27 @@ class PrefetchAggregator(Aggregator):
                             - float(self.sticky_group_size)
                         )
                     )
-                )
+                ) # (1 / N) * ((N - S) / (K - C)), where prob of client being sampled is (K-C)/(N-S)
         else:
             """
             [FedAvg] "Communication-Efficient Learning of Deep Networks from Decentralized Data".
             H. Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, Blaise Aguera y Arcas. AISTATS, 2017
             """
-            # Importance of each update is 1/#_of_participants
-            # importance = 1./self.tasks_round
-            prob = 1.0 / self.tasks_round
-        return prob
+            # probability of client being sampled is 1 / N
+            # the weight is actually 1 / (K * (1 / N)) which when normalized by 1 / N leads to 1 / K
+            weight = 1.0 / self.tasks_round # (1 / K)
+            
+
+        # if self.enable_prefetch:
+        #     l_pre = self.prefetch_schedule[self.round][client_id]
+        #     if l_pre == self.round:
+        #         pass
+        #     else:
+        #         tmp = 1. / self.feasible_client_count,
+        #         for i in range(1, self.round - l_pre + 1):
+        #             tmp += (avail_client_set_sizes[-i] + avail_client_set_sizes[-i-1] - 1) / (avail_client_set_sizes[-i] * avail_client_set_sizes[-i-1])
+        #         weight *= 1. / tmp
+        return weight
 
     def apply_and_update_mask(self):
         compressor_tot = TopKCompressor(compress_ratio=self.total_mask_ratio)
@@ -1424,6 +1464,7 @@ class PrefetchAggregator(Aggregator):
 
         Otherwise, use uniform sampling.
         """
+        self.prefetch_schedule.append({})
         if self.sampling_strategy == "STICKY":
             if self.enable_prefetch:
                 if self.args.presample_strategy == SIMPLE:

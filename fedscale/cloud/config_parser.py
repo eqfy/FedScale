@@ -315,6 +315,11 @@ parser.add_argument('--fl_method', type=str, default="FedAvg", help="FL method")
 parser.add_argument('--enable_prefetch', type=parse_bool, default=False, help="whether prefetch is enabled")
 parser.add_argument('--per_client_prefetch', type=parse_bool, default=True, help="Determines whether each client individually assess the number of prefetch rounds it will take")
 parser.add_argument('--presample_strategy', type=str, default="None", help="Method used for presampling for sticky sampling")
+# prefetch lost client replacement
+parser.add_argument('--enable_replace_offline', type=parse_bool, default=False, help="whether to replace presampled clients that were lost before training")
+parser.add_argument('--use_latest_online_replacement', type=parse_bool, default=False, help="whether to replace presampled clients from the online client set of the latest round or the presample round")
+parser.add_argument('--use_prefetch_reweight', type=parse_bool, default=True, help="whether to reweight replacement clients for prefetch for unbiasedness")
+
 parser.add_argument('--compress_batch_norm', type=parse_bool, default=False, help="whether to compress the batch normalization layers")
 parser.add_argument('--download_compressor_type', type=str, default="None", help="Determines what compression method is used for server to client communciation")
 parser.add_argument('--upload_compressor_type', type=str, default="None", help="Determines what compression method is used for client to server communciation")

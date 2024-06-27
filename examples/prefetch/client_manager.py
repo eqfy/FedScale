@@ -1,10 +1,12 @@
 from collections import deque
 import logging
-from typing import Dict
+import math
+from typing import Dict, List
 
 import numpy as np
 from scipy.special import softmax
 from examples.prefetch.client_metadata import PrefetchClientMetadata
+from examples.prefetch.constants import GLUEFL
 from fedscale.cloud.client_manager import ClientManager
 
 
@@ -15,7 +17,8 @@ class PrefetchClientManager(ClientManager):
         self.sticky_group = []
 
         # Configs
-        self.sample_num = round(self.args.num_participants * self.args.overcommitment)
+        # self.sample_num = round(self.args.num_participants * self.args.overcommitment)
+        self.sample_num = self.args.num_participants * self.args.overcommitment
         self.sticky_group_size = args.sticky_group_size  # aka "k"
         self.overcommitment = args.overcommitment
         numOfClientsOvercommit = round(
@@ -36,6 +39,14 @@ class PrefetchClientManager(ClientManager):
         self.sampled_sticky_clients = deque()
         self.sampled_changed_clients = deque()
         self.sampled_clients = deque()
+        self.historical_sticky_group = []
+
+    # TODO Function to dynamically adjust extra_commit, may not be used in future designs.
+    def init_sample_num(self) -> int:
+        extra_commit = 1.3
+        if not self.args.enable_prefetch:
+            return self.args.num_participants * self.args.overcommitment
+        
 
     def register_client(
         self,
@@ -87,17 +98,28 @@ class PrefetchClientManager(ClientManager):
         else:
             del self.client_metadata[uniqueId]
 
+    def get_round_sample_num(self) -> int:
+        sample_num_floor = math.floor(self.sample_num)
+        sample_num_ceil = math.ceil(self.sample_num)
+        if sample_num_floor == sample_num_ceil:
+            return sample_num_floor
+        return sample_num_floor + int(self.rng.random() > (self.sample_num - sample_num_floor))
+
+    def select_participants(self, cur_time: float = 0) -> List[int]:
+        return super().select_participants(self.get_round_sample_num(), cur_time)
+
     # Sticky sampling
     def select_participants_sticky(self, cur_time):
         self.count += 1
+        round_sample_num = self.get_round_sample_num()
 
         logging.info(
-            f"Sticky sampling num {self.sample_num} K (sticky group size) {self.sticky_group_size} Change {self.change_num}"
+            f"Sticky sampling num {round_sample_num} K (sticky group size) {self.sticky_group_size} Change {self.change_num}"
         )
         clients_online = self.getFeasibleClients(cur_time)
         clients_online_set = set(clients_online)
         # logging.info(f"clients online: {clients_online}")
-        if len(clients_online) <= self.sample_num:
+        if len(clients_online) <= round_sample_num:
             logging.error("Not enough online clients!")
             return clients_online, []
 
@@ -115,7 +137,7 @@ class PrefetchClientManager(ClientManager):
             self.sticky_group = temp_group[-self.sticky_group_size :]
             self.rng.shuffle(self.sticky_group)
             # We treat the clients sampled from the first round as sticky clients
-            selected_new_clients = self.sticky_group[: min(self.sample_num, client_len)]
+            selected_new_clients = self.sticky_group[: min(round_sample_num, client_len)]
         else:
             # randomly delete some clients
             self.rng.shuffle(self.sticky_group)
@@ -123,9 +145,9 @@ class PrefetchClientManager(ClientManager):
             online_sticky_group = [
                 i for i in self.sticky_group if i in clients_online_set
             ]
-            logging.info(f"num {self.sample_num} change {self.change_num}")
+            logging.info(f"num {round_sample_num} change {self.change_num}")
             selected_sticky_clients = online_sticky_group[
-                : (self.sample_num - self.change_num)
+                : (round_sample_num - self.change_num)
             ]
             # randomly include some clients
             self.rng.shuffle(clients_online)
@@ -150,6 +172,7 @@ class PrefetchClientManager(ClientManager):
         )
 
     def update_sticky_group(self, new_clients):
+        self.historical_sticky_group.append(self.sticky_group)
         self.rng.shuffle(self.sticky_group)
         self.sticky_group = self.sticky_group[: -len(new_clients)] + new_clients
 
@@ -275,17 +298,22 @@ class PrefetchClientManager(ClientManager):
 
     def presample(self, round: int, cur_time: float):
         if self.max_prefetch_round <= 0:
-            return super().select_participants(self.sample_num, cur_time=cur_time)
+            return self.select_participants(cur_time=cur_time)
 
         if round == 1:
             for _ in range(self.max_prefetch_round):
-                selected_clients = super().select_participants(
-                    self.sample_num, cur_time=cur_time
-                )
+                selected_clients = self.select_participants(cur_time=cur_time)
                 self.sampled_clients.append(selected_clients)
 
-        selected_clients = super().select_participants(
-            self.sample_num, cur_time=cur_time
-        )
+        selected_clients = self.select_participants(cur_time=cur_time)
         self.sampled_clients.append(selected_clients)
         return self.sampled_clients.popleft()
+    
+    def get_replacement_client(self, cur_time: int, cur_round: int, avoid_list = []):
+        sampling_frame = []
+        if self.args.fl_method == GLUEFL:
+            online_clients = set(self.getFeasibleClients(cur_time))
+            sampling_frame = [i for i in self.historical_sticky_group[cur_round - 1] if (i in online_clients and i not in avoid_list)]
+        else:
+            sampling_frame = [i for i in self.getFeasibleClients(cur_time) if i not in avoid_list]
+        return self.rng.choice(sampling_frame)
